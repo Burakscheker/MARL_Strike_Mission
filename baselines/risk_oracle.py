@@ -28,8 +28,9 @@ import os
 
 import numpy as np
 
-from config import (GOAL, GRID_N, INNER_HALF, OUTER_HALF, P_DEATH,
-                    R_RISK_COEF, R_STEP, RADARS, RISK_CACHE, ZONE_CACHE)
+from config import (GOAL, GRID_N, HAZARD_MODE, INNER_HALF, OUTER_HALF,
+                    P_DEATH, P_INNER_TOTAL, P_OUTER_TOTAL, R_RISK_COEF,
+                    R_STEP, RADARS, RISK_CACHE, ZONE_CACHE)
 
 # risk maliyetinin ADIM maliyeti cinsinden agirligi.
 # cost(hucre) = 1 + RISK_W * p_death(hucre)  [adim-esdegeri]
@@ -73,50 +74,95 @@ def death_prob_map(zone: np.ndarray | None = None) -> np.ndarray:
 
 # ------------------------------------------------------- risk mesafe haritasi
 
-def _sweep(dist: np.ndarray, w: np.ndarray) -> bool:
+def move_risk(z_from: np.ndarray, z_to: np.ndarray,
+              mode: str = HAZARD_MODE) -> np.ndarray:
+    """Bir hucreden komsusuna GECERKEN olum olasiligi.
+
+    per_entry (varsayilan, patronun kurali): risk SADECE bolge seviyesi
+    ARTARKEN odenir — 0->1 %20, 1->2 %90, 0->2 (kose durumu) %90. Ayni
+    seviyede kalmak veya cikmak BEDAVA. Yani "bolgede ne kadar kaldigi"
+    maliyeti hic etkilemez, "girdi mi girmedi mi" etkiler.
+
+    per_step (ablation): varilan hucrenin adim basi hazard'i.
+    """
+    if mode == "per_step":
+        return np.asarray(P_DEATH, dtype=np.float64)[z_to]
+    lut = np.zeros((3, 3), dtype=np.float64)
+    lut[0, 1] = P_OUTER_TOTAL
+    lut[0, 2] = P_INNER_TOTAL
+    lut[1, 2] = P_INNER_TOTAL
+    return lut[z_from, z_to]
+
+
+def _direction_costs(z: np.ndarray, risk_w: float, mode: str) -> dict:
+    """4 yon icin "u'dan v'ye HAREKET" maliyeti: 1 adim + risk_w * p(u->v).
+
+    Node-agirlikli (her hucreye sabit maliyet) surumden KENAR-agirlikliya
+    gecis, per_entry modunun matematiksel geregi: orada maliyet hucrede
+    DURMAKTAN degil, sinirdan GECMEKTEN doguyor.
+    """
+    n = z.shape[0]
+    cost = {}
+    # up[r] = (r,c) -> (r-1,c) hareketinin maliyeti (r >= 1)
+    cost["up"] = np.full((n, n), np.inf)
+    cost["up"][1:] = 1.0 + risk_w * move_risk(z[1:], z[:-1], mode)
+    # down[r] = (r,c) -> (r+1,c)
+    cost["down"] = np.full((n, n), np.inf)
+    cost["down"][:-1] = 1.0 + risk_w * move_risk(z[:-1], z[1:], mode)
+    # left[:,c] = (r,c) -> (r,c-1)
+    cost["left"] = np.full((n, n), np.inf)
+    cost["left"][:, 1:] = 1.0 + risk_w * move_risk(z[:, 1:], z[:, :-1], mode)
+    # right[:,c] = (r,c) -> (r,c+1)
+    cost["right"] = np.full((n, n), np.inf)
+    cost["right"][:, :-1] = 1.0 + risk_w * move_risk(z[:, :-1], z[:, 1:], mode)
+    return cost
+
+
+def _sweep(dist: np.ndarray, cost: dict) -> bool:
     """Tek tam tarama seti (4 yon). Degisiklik olduysa True doner.
 
-    Her yon icin bir eksende SIRALI (Gauss-Seidel), diger eksende vektorize
-    ilerlenir — yani 1000 satirlik dongu, her adimi 1000 elemanlik numpy
-    islemi. Saf Python'da hucre hucre dolasmaya gore ~1000x hizli.
+    dist[u] = u'dan hedefe en ucuz maliyet, yani
+        dist[u] = min_v ( cost(u->v) + dist[v] ).
+    Asagidaki her dongu bir eksende SIRALI (Gauss-Seidel), diger eksende
+    vektorize ilerler — 1000 satirlik dongu, her adimi 1000 elemanlik numpy
+    islemi. Sabit noktaya kadar tekrarlanan bu sema Bellman-Ford'un iyi
+    siralamali hali, yani sonucu KESIN.
     """
     before = dist.copy()
     n = dist.shape[0]
 
-    for r in range(1, n):                       # asagi
-        np.minimum(dist[r], dist[r - 1] + w[r], out=dist[r])
-    for r in range(n - 2, -1, -1):              # yukari
-        np.minimum(dist[r], dist[r + 1] + w[r], out=dist[r])
-    for c in range(1, n):                       # saga
-        np.minimum(dist[:, c], dist[:, c - 1] + w[:, c], out=dist[:, c])
-    for c in range(n - 2, -1, -1):              # sola
-        np.minimum(dist[:, c], dist[:, c + 1] + w[:, c], out=dist[:, c])
+    # dist[r]'yi dist[r-1] uzerinden guncelle -> hareket (r,c) -> (r-1,c) = "up"
+    for r in range(1, n):
+        np.minimum(dist[r], dist[r - 1] + cost["up"][r], out=dist[r])
+    for r in range(n - 2, -1, -1):
+        np.minimum(dist[r], dist[r + 1] + cost["down"][r], out=dist[r])
+    for c in range(1, n):
+        np.minimum(dist[:, c], dist[:, c - 1] + cost["left"][:, c], out=dist[:, c])
+    for c in range(n - 2, -1, -1):
+        np.minimum(dist[:, c], dist[:, c + 1] + cost["right"][:, c], out=dist[:, c])
 
     return bool(np.any(dist < before - 1e-6))
 
 
 def build_risk_distance_map(goal=GOAL, zone: np.ndarray | None = None,
                             risk_w: float = RISK_W,
+                            mode: str = HAZARD_MODE,
                             max_iter: int = 40,
                             verbose: bool = False) -> np.ndarray:
     """Hedefe "adim + risk" maliyetli en ucuz mesafe. (n,n) float32.
 
-    dist[cell] = cell'den GOAL'a giderken odenecek toplam maliyet
-    (hedefin kendi hucre maliyeti dahil DEGIL, cikis hucresininki dahil DEGIL —
-    yani yalnizca GIRILEN hucrelerin maliyeti; standart node-weighted en kisa yol).
-
-    Komsu FARKI (d_own - d_komsu) bu yuzden guvenli duz bir adimda tam +1.0
-    cikar — MARL-Pathfinding'in BFS hop farkiyla AYNI olcek, transfer edilen
-    agirliklarin bu skalarlari ayni olcekte gormesi icin onemli.
+    Komsu FARKI (d_own - d_komsu) guvenli duz bir adimda tam +1.0 cikar —
+    MARL-Pathfinding'in BFS hop farkiyla AYNI olcek, transfer edilen
+    agirliklarin bu skalarlari tanidik bir araliktan gormesi icin onemli.
     """
     z = zone_map() if zone is None else zone
-    w = (1.0 + risk_w * np.asarray(P_DEATH, dtype=np.float64)[z]).astype(np.float64)
+    cost = _direction_costs(z, risk_w, mode)
 
     dist = np.full(z.shape, np.inf, dtype=np.float64)
     dist[goal] = 0.0
 
     for it in range(max_iter):
-        changed = _sweep(dist, w)
+        changed = _sweep(dist, cost)
         if verbose:
             print(f"  sweep {it + 1}: {'degisti' if changed else 'sabit nokta'}")
         if not changed:
@@ -126,10 +172,17 @@ def build_risk_distance_map(goal=GOAL, zone: np.ndarray | None = None,
     return dist.astype(np.float32)
 
 
-def risk_distance_map(cache: str | None = RISK_CACHE, verbose: bool = False) -> np.ndarray:
-    if cache and os.path.exists(cache):
-        return np.load(cache)
-    d = build_risk_distance_map(verbose=verbose)
+def risk_distance_map(cache: str | None = RISK_CACHE, verbose: bool = False,
+                      mode: str = HAZARD_MODE) -> np.ndarray:
+    # Onbellek adi MODU icerir: per_step ve per_entry TAMAMEN farkli haritalar
+    # uretiyor, ayni dosyaya yazilirsa mod degistirince sessizce yanlis harita
+    # kullanilir (ve hicbir yerde patlamaz — en tehlikeli hata turu).
+    if cache:
+        root, ext = os.path.splitext(cache)
+        cache = f"{root}_{mode}{ext}"
+        if os.path.exists(cache):
+            return np.load(cache)
+    d = build_risk_distance_map(verbose=verbose, mode=mode)
     if cache:
         os.makedirs(os.path.dirname(cache) or ".", exist_ok=True)
         np.save(cache, d)
@@ -139,19 +192,29 @@ def risk_distance_map(cache: str | None = RISK_CACHE, verbose: bool = False) -> 
 # ----------------------------------------------------------------- analitik
 
 def survival_prob(path, zone: np.ndarray | None = None,
-                  include_start: bool = False) -> float:
-    """Verilen yolun ANALITIK hayatta kalma olasiligi: prod(1 - p_death).
+                  mode: str = HAZARD_MODE) -> float:
+    """Verilen yolun ANALITIK hayatta kalma olasiligi.
 
-    include_start=False: baslangic hucresi sayilmaz (ortamda da t=0'da zar
-    atilmiyor, ilk zar ilk HAREKETTEN sonra). Monte Carlo yok — bu deger
-    gurultusuz, tek bir episode'dan bile olculebilir.
+    per_entry: SADECE bolge seviyesinin ARTTIGI gecislerde zar atilir
+               (patronun kurali: sure onemsiz, giris onemli).
+    per_step  : her hucrede zar (ablation).
+
+    Monte Carlo yok — bu deger gurultusuz, tek bir episode'dan bile olculebilir.
+    Basari oranini ASLA tek basina raporlama; bunu yanina koy.
     """
     z = zone_map() if zone is None else zone
-    p = np.asarray(P_DEATH, dtype=np.float64)
-    cells = path if include_start else path[1:]
     s = 1.0
-    for r, c in cells:
-        s *= (1.0 - p[z[r, c]])
+    if mode == "per_step":
+        p = np.asarray(P_DEATH, dtype=np.float64)
+        for r, c in path[1:]:
+            s *= (1.0 - p[z[r, c]])
+        return s
+    prev = 0                                   # ortamda da _prev_zone 0'dan baslar
+    for r, c in path:
+        cur = int(z[r, c])
+        if cur > prev:
+            s *= (1.0 - (P_INNER_TOTAL if cur == 2 else P_OUTER_TOTAL))
+        prev = cur
     return s
 
 

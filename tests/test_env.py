@@ -176,19 +176,67 @@ def test_reward_terminals():
     check("takim basarisi", info["team_success"])
 
 
-def test_death_penalty():
-    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False)
-    env.reset()
+def test_death_penalty(trials=200):
+    """Ic halkaya girmek ~%90 olum getirmeli (per_entry: TEK zar)."""
     r0, c0 = C.RADARS[0]
-    env.pos = {C.AGENT_1: (r0, c0), C.AGENT_2: (0, 0)}
-    # ic halkanin ortasinda %1.6/adim; 500 adimda neredeyse kesin olum
-    total = 0.0
-    for _ in range(500):
-        _, r, done, _ = env.step({C.AGENT_1: C.UP, C.AGENT_2: C.RIGHT})
-        total += r
-        if not env.alive[C.AGENT_1]:
-            break
-    check("ic halkada uzun kalinca olum geliyor", not env.alive[C.AGENT_1])
+    deaths = 0
+    for k in range(trials):
+        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False)
+        env.reset()
+        env.pos = {C.AGENT_1: (r0, c0), C.AGENT_2: (0, 0)}
+        env.step({C.AGENT_1: C.UP, C.AGENT_2: C.RIGHT})
+        deaths += int(not env.alive[C.AGENT_1])
+    rate = deaths / trials
+    check("ic halkaya girisde ~%90 olum", abs(rate - C.P_INNER_TOTAL) < 0.06,
+          f"olculen={rate:.3f} hedef={C.P_INNER_TOTAL}")
+
+
+def test_per_entry_no_accumulation():
+    """PATRONUN KURALI: bolgede kalmak EK risk getirmemeli.
+
+    Ic halkanin ortasina koyup 200 adim gezdiriyoruz; ILK adimin zarindan
+    sonra hic yeni zar atilmamali. Zar atilsaydi 200 adimda hayatta kalan
+    kalmazdi.
+    """
+    r0, c0 = C.RADARS[0]
+    survived = 0
+    trials = 200
+    for k in range(trials):
+        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False)
+        env.reset()
+        # ILK zari atlamak icin ucagi zaten "icerideymis" gibi baslat
+        env.pos = {C.AGENT_1: (r0, c0), C.AGENT_2: (0, 0)}
+        env._prev_zone[C.AGENT_1] = 2
+        for _ in range(200):
+            env.step({C.AGENT_1: C.UP if _ % 2 == 0 else C.DOWN,
+                      C.AGENT_2: C.RIGHT})
+            if not env.alive[C.AGENT_1]:
+                break
+        survived += int(env.alive[C.AGENT_1])
+    check("ic halkada 200 adim = SIFIR ek risk", survived == trials,
+          f"{trials - survived}/{trials} oldu (0 olmali)")
+
+
+def test_reentry_rolls_again():
+    """Cikip tekrar girmek YENI bir zar olmali (yeni angajman)."""
+    r0, c0 = C.RADARS[0]
+    edge = r0 - C.OUTER_HALF            # dis halkanin ust siniri
+    deaths = 0
+    trials = 300
+    for k in range(trials):
+        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False)
+        env.reset()
+        env.pos = {C.AGENT_1: (edge - 1, c0), C.AGENT_2: (0, 0)}   # disarda
+        # gir (zar 1) -> cik -> gir (zar 2)
+        for act in (C.DOWN, C.UP, C.DOWN):
+            env.step({C.AGENT_1: act, C.AGENT_2: C.RIGHT})
+            if not env.alive[C.AGENT_1]:
+                break
+        deaths += int(not env.alive[C.AGENT_1])
+    rate = deaths / trials
+    expect = 1 - (1 - C.P_OUTER_TOTAL) ** 2      # iki bagimsiz giris
+    check("iki kez girmek = iki zar", abs(rate - expect) < 0.07,
+          f"olculen={rate:.3f} beklenen={expect:.3f}")
 
 
 def main():
@@ -202,9 +250,11 @@ def main():
     print("\n=== risk modeli ===")
     test_simulation_matches_analytic()
     test_safe_path_never_dies()
-    print("\n=== odul ===")
+    print("\n=== odul / risk kurali ===")
     test_reward_terminals()
     test_death_penalty()
+    test_per_entry_no_accumulation()
+    test_reentry_rolls_again()
 
     print("\n" + "=" * 60)
     if _FAILED:

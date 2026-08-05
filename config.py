@@ -58,9 +58,20 @@ P_DEATH = (
     1.0 - (1.0 - P_INNER_TOTAL) ** (1.0 / _CROSS_INNER),   # ~0.016184 / adim
 )
 
-# "per_entry": bolgeye HER GIRISTE tek zar (P_*_TOTAL dogrudan kullanilir).
-# Ablation icin; varsayilan "per_step" (bkz. Strike_Mission.md §0.2).
-HAZARD_MODE = "per_step"
+# RISK MODELI — Burak'in patronunun netlestirdigi kural (2026-08-05):
+#   "detection zone'da ister 20 adim at ister 2 adim gir-cik yap, olum
+#    ihtimali ESIT. 0.2*0.02*0.2 gibi bir birikme YOK."
+# Yani risk SUREYE BAGLI DEGIL: bolgeye GIRIS basina TEK zar.
+#   dis halkaya giris -> %20 olum
+#   ic halkaya giris  -> %90 olum   (dis'ten ic'e gecerken ayrica zar)
+# Cikip tekrar girmek YENI bir zardir (yeni tespit/angajman).
+#
+# "per_step" (adim basi hazard, P_DEATH ile) ABLATION olarak duruyor:
+# --hazard per_step ile kosulur. Ikisinin karsilastirmasi rapora girer,
+# cunku ikisi NITELIKSEL OLARAK FARKLI problemler uretiyor: per_step'te
+# "bolgeyi tegetten sıyır" ogrenilecek bir beceridir, per_entry'de degildir
+# (girdiysen girmissindir) — orada tek beceri "HIC girme".
+HAZARD_MODE = "per_entry"
 
 # Radar alarm kuplaji — Strike_Mission.md §0.4 / Asama 6.
 # Bir ucak dis halkaya girince o radar alarma gecer, olum olasiligi carpilir.
@@ -238,7 +249,12 @@ def summary() -> str:
         f"grid            : {GRID_N}x{GRID_N} (1 hucre = 1 birim)",
         f"B -> H          : {START} -> {GOAL}, optimal {opt} adim, limit {MAX_STEPS}",
         f"radarlar        : {RADARS}  dis +-{OUTER_HALF}, ic +-{INNER_HALF}",
-        f"p_death/adim    : dis {P_DEATH[1]:.6f}  ic {P_DEATH[2]:.6f}",
+        (f"risk modeli     : per_entry — GIRIS basina tek zar, "
+         f"dis %{P_OUTER_TOTAL*100:.0f}  ic %{P_INNER_TOTAL*100:.0f} "
+         f"(surede birikme YOK)"
+         if HAZARD_MODE == "per_entry" else
+         f"risk modeli     : per_step (ABLATION) — adim basi "
+         f"dis {P_DEATH[1]:.6f}  ic {P_DEATH[2]:.6f}"),
         f"gamma           : {GAMMA}  (etkin ufuk {1/(1-GAMMA):.0f} adim)",
         f"shaping         : COEF={SHAPING_COEF}, adim basi net "
         f"~{SHAPING_COEF*(1/opt - (1-GAMMA)*0.5):.4f} (|R_STEP|={abs(R_STEP)})",

@@ -71,6 +71,18 @@ gerçek maliyeti: 51x51'de aynı iş ~20x hızlıydı.
 
 ### 0.2 Risk modeli: "girişte tek zar" değil, **adım başına hazard** 🔑
 
+> **GÜNCELLEME 2026-08-05 — patron netleştirdi:** *"detection zone'da ister 20
+> adım at ister 2 adım gir-çık yap, ölüm ihtimali eşit; `0.2*0.02*0.2` gibi bir
+> birikme yok."* Yani **kural per-entry**: bölgeye **giriş başına tek zar**
+> (dış %20, iç %90), süre önemsiz. `HAZARD_MODE = "per_entry"` varsayılan
+> oldu; aşağıdaki "adım başına hazard" tartışması artık **ablation** olarak
+> duruyor (`--hazard per_step`).
+>
+> Bunun tasarımsal sonucu: per_entry'de "bölgeyi teğetten sıyır" diye
+> öğrenilecek bir beceri **yok** — girdiysen girmişsindir. Tek beceri
+> **hiç girmemek**. Bu problemi belirgin şekilde basitleştiriyor ve
+> §0.3'teki trivial'lik sorununu daha da keskinleştiriyor.
+
 Senin tarifin ("turuncu alana girdiğinde %80 yaşama, iç alanda %10 yaşama")
 iki şekilde okunabilir ve **ikisi tamamen farklı problemler üretiyor**:
 
@@ -110,12 +122,14 @@ ağla ve elle yazılmış sabit bir politikayla** karşılaştırdım
 
 | Politika | Takım başarısı | Uzunluk | Dış/İç maruziyet | Analitik hayatta kalma |
 |---|---:|---:|---:|---:|
-| Rastgele monoton (baseline) | **10%** | 657† | 148 / 122 | — |
+| Rastgele monoton (baseline) | **20%** | 730† | 164 / 36 | 0.080 |
+| Naif çapraz (merdiven) | — | 1998 | 160 / 161 | **0.080** = 0.8×0.1 |
 | **SABİT politika (hep sağ → hep aşağı)** | **100%** | **1998** | **0 / 0** | **1.000** |
 | **SABİT politika (hep aşağı → hep sağ)** | **100%** | **1998** | **0 / 0** | **1.000** |
 | **Dijkstra oracle** | **100%** | **1998** | **0 / 0** | **1.000** |
 
-† ölümle kesildiği için kısa.
+† ölümle kesildiği için kısa. Sayılar per-entry risk modeliyle
+(`python -m baselines.policies`).
 
 🚨 **Sabit politika oracle'ın kendisi.** Yani bu haritada öğrenilecek hiçbir
 şey yok — hiç eğitilmemiş bir ağ bile, argmax'ı tesadüfen "sağ"a düşerse,
