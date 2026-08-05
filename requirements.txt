@@ -1,0 +1,3 @@
+numpy>=2.0
+matplotlib>=3.9
+torch>=2.9          # Asama 3'ten itibaren (Python 3.14 icin cp314 wheel'i mevcut)
