@@ -17,45 +17,57 @@ toslamayacağız.
 
 ## 0. Ölçülmüş gerçekler (tahmin değil, hesapladım)
 
-Plan yazmadan önce senin verdiğin haritanın geometrisini ve risk matematiğini
-`scratchpad/verify_geometry.py` ile taradım. Aşağıdaki sayılar bütün tasarım
-kararlarını belirliyor.
+Aşağıdaki sayıların **hepsi ölçüldü**, `python -m baselines.map_check` ve
+`python -m baselines.risk_oracle` ile yeniden üretilebilir.
 
-### 0.1 Ölçek kararı: `STEP_SIZE = 20` birim → 51x51 latis 🔑
+### 0.1 Ölçek: **tam çözünürlük, 1000x1000** (hücre = 1 birim)
 
-**Bu planın en önemli mühendislik kararı.** 1000x1000'i 1 birim adımla koşmak
-imkânsız: B→H Manhattan mesafesi **1985 adım**, timeout ~2800 adım, 30.000
-episode × 2 ajan → CPU'da haftalar. MARL-Pathfinding'de 50x50 + 140 adım
-bütçesi ölçülmüş ve kabul edilebilir çıkmıştı (VDN 30k ≈ 2.1 saat).
+Planın ilk sürümünde `STEP_SIZE=20` ile 51x51 latise indirgemiştim; Burak
+bunu iptal etti, tam çözünürlükte koşuyoruz. Ölçekten bağımsız kalan ve
+kalmayan şeyler:
 
-Uçak fiziği zaten bunu haklı çıkarıyor: bir uçak "tick" başına 1 metre değil,
-sabit bir mesafe kat eder. `STEP_SIZE = 20` birim seçtim ve geometri **tam
-oturdu** (tesadüf değil, senin verdiğin sayılar 20'ye tam bölünüyor):
+| | Değer | Not |
+|---|---:|---|
+| Grid | 1000x1000 hücre | B = **(0,0)**, H = **(999,999)** |
+| B→H Manhattan | **1998 adım** | `MAX_STEPS = 2800` (1.4x tampon) |
+| Dış halka | ±110 hücre (221 kenar) | |
+| İç halka | ±70 hücre (141 kenar) | |
+| Tehlikeli hücre oranı | **%14.7** | 86.880 dış + 59.643 iç |
 
-| | Birim | Latis hücresi | Kontrol |
-|---|---:|---:|---|
-| Grid kenarı | 1000 | 50 hücre → **51x51 nokta** (0..50) | ✔ |
-| Dış halka kenarı | 220 | 11 nokta (merkez ±5) → 11×20 = **220** | ✔ tam |
-| İç halka kenarı | 140 | 7 nokta (merkez ±3) → 7×20 = **140** | ✔ tam |
-| B→H Manhattan | 1985 | **100 adım** | ✔ |
+Dönüşüm: `row = 500 − y`, `col = x + 500`.
 
-Üç radar merkezi de **tam latis noktasına** düşüyor (yarım hücre kayması yok):
+| Radar | (x, y) | Hücre (row, col) |
+|---|---|---|
+| R1 | (−280, 220) | **(280, 220)** |
+| R2 | (200, 100) | **(400, 700)** |
+| R3 | (−100, −280) | **(780, 400)** |
 
-| Radar | (x, y) | Hücre (row, col) | Dış halka | İç halka |
-|---|---|---|---|---|
-| R1 | (−280, 220) | **(14, 11)** | row 9-19, col 6-16 | row 11-17, col 8-14 |
-| R2 | (200, 100) | **(20, 35)** | row 15-25, col 30-40 | row 17-23, col 32-38 |
-| R3 | (−100, −280) | **(39, 20)** | row 34-44, col 15-25 | row 36-42, col 17-23 |
+**Tam çözünürlüğün zorladığı iki değişiklik** (ikisi de ölçüldü, tahmin değil):
 
-Dönüşüm: `row = (500 − y) / 20`, `col = (x + 500) / 20`.
-B = (−500, +500) → **(0, 0)** (sol üst), H = (+500, −500) → **(50, 50)** (sağ alt).
+1. **`GAMMA = 0.99` → `0.9998`.** Episode 2000+ adım. `0.99^2000 = 2e-9` —
+   ajan hedefi fiziksel olarak göremez. Dahası potential-based shaping'in
+   "drag" terimi `(1−γ)·Φ`, ilerleme terimi `ΔΦ = 1/1998 = 0.0005`; γ=0.99'da
+   drag 0.01 çıkıyor, yani shaping ajanı ilerlemekten **caydırırdı**.
+   γ=0.9998'de drag ≤ 0.0002, ilerleme 2.5x baskın.
+2. **`PATCH_STRIDE = 16`.** 21x21 pencere stride=1'de sadece ±10 hücre görür;
+   dış halka 221 hücre genişliğinde, yani ajanın penceresi tamamen halkanın
+   içinde kalır ve **sınırı hiç göremez** (kanal sabit 1.0, bilgisiz). 16
+   hücre arayla örneklenince pencere ±160 hücre kapsıyor, bir radarı
+   sınırlarıyla görüyor. Tensör şekli değişmediği için checkpoint uyumu bozulmuyor.
 
-> Görseldeki `(-500,495)` / `(500,-490)` çizim kaymasıdır; köşeye yuvarladım.
-> `GRID_N` tek satırlık bir sabit — istersen 101x101'e (STEP=10) çıkarmak
-> ortamda **hiçbir kod değişikliği** gerektirmiyor, sadece eğitim süresi 4x'liyor.
+### 0.1b Ölçülen hız 🔑
 
-**Tehlike yoğunluğu:** 2601 latis noktasının 216'sı dış halka, 147'si iç halka
-→ haritanın **%14.0'ü tehlikeli**, %86'sı temiz.
+VDN, 1000x1000, CPU: **5.0 saniye / episode** (2800 adım).
+
+| Episode | Süre |
+|---:|---|
+| 500 | ~42 dk |
+| 1.000 | ~1.4 saat |
+| 2.000 | ~2.8 saat |
+| 10.000 | ~14 saat |
+
+QMIX ~2x daha yavaş olacak (mixer'ın state kodlayıcısı). Bu, tam çözünürlüğün
+gerçek maliyeti: 51x51'de aynı iş ~20x hızlıydı.
 
 ### 0.2 Risk modeli: "girişte tek zar" değil, **adım başına hazard** 🔑
 
@@ -74,9 +86,14 @@ riskin %20 (dış) / %90 (iç) olsun."*
 ```
 p_step = 1 − (1 − p_toplam)^(1 / çaprazlama_adımı)
 
-dış:  1 − 0.80^(1/11) = 0.02008   → %2.01 / adım
-iç :  1 − 0.10^(1/7)  = 0.28031   → %28.03 / adım
+dış:  1 − 0.80^(1/221) = 0.001009   → %0.101 / adım
+iç :  1 − 0.10^(1/141) = 0.016198   → %1.620 / adım
 ```
+
+Bu formül **ölçekten bağımsız**: 51x51'de de 1000x1000'de de "halkayı boydan
+boya geç" toplam riski aynı %20 / %90 çıkıyor. `tests/test_env.py` ortamın
+gerçek zarını analitik değerle karşılaştırıyor — ölçüldü: **0.0975 vs 0.1016**
+(3σ içinde). Yani ortamın rastgeleliği oracle'ın matematiğiyle uyuşuyor.
 
 İç halka içinde dış halka **saymaz** (iç kazanır, çift ceza yok). Zar her
 timestep'te, her uçak için **bağımsız** atılır.
@@ -84,35 +101,63 @@ timestep'te, her uçak için **bağımsız** atılır.
 > `config.HAZARD_MODE = "per_step" | "per_entry"` bayrağı ile ikisi de
 > koşulabilir — ablation olarak rapora girer. Varsayılan `per_step`.
 
-### 0.3 Bu harita ne kadar zor — ve asıl bulgu
+### 0.3 🚨 SABİT HARİTA TRIVIAL — ölçüldü, en önemli bulgu
 
-Dijkstra ile (maliyet = `−ln(1 − p_ölüm)`) **hayatta kalma olasılığını
-maksimize eden yolu** kesin olarak hesapladım. Sonuçlar:
+Dijkstra ile (maliyet = `−ln(1 − p_ölüm)` + adım) hayatta kalma olasılığını
+maksimize eden yolu kesin olarak hesapladım, sonra da **hiç eğitilmemiş bir
+ağla ve elle yazılmış sabit bir politikayla** karşılaştırdım
+(`python -m baselines.policies`):
 
-| Politika | Tek uçak hayatta kalma | Takım (≥1 varır) | Uzunluk |
+| Politika | Takım başarısı | Uzunluk | Dış/İç maruziyet | Analitik hayatta kalma |
+|---|---:|---:|---:|---:|
+| Rastgele monoton (baseline) | **10%** | 657† | 148 / 122 | — |
+| **SABİT politika (hep sağ → hep aşağı)** | **100%** | **1998** | **0 / 0** | **1.000** |
+| **SABİT politika (hep aşağı → hep sağ)** | **100%** | **1998** | **0 / 0** | **1.000** |
+| **Dijkstra oracle** | **100%** | **1998** | **0 / 0** | **1.000** |
+
+† ölümle kesildiği için kısa.
+
+🚨 **Sabit politika oracle'ın kendisi.** Yani bu haritada öğrenilecek hiçbir
+şey yok — hiç eğitilmemiş bir ağ bile, argmax'ı tesadüfen "sağ"a düşerse,
+mükemmel skoru alır. İlk duman testinde 4 episode'luk VDN koşusu eval'de
+%100 / 1998 adım / sıfır maruziyet verdi ve **bu öğrenme değildi**, bu artefakttı.
+
+**Kök neden:** B sol-üst köşe, H sağ-alt köşe, üç radar da iç bölgede.
+Gridin **kenarı baştan sona radarsız bir otoyol**, ve köşeden köşeye
+gidildiği için kenardan dolaşmanın uzunluk bedeli **sıfır**.
+Güvenli yol = en kısa yol = trivial politika. Risk ile uzunluk arasında
+**hiçbir ödünleşme yok**, dolayısıyla optimize edilecek bir şey de yok.
+
+### 0.3b Haritayı nasıl anlamlı yaparız — taradım
+
+150 rastgele radar konfigürasyonu tarayıp üç kategoriye ayırdım
+(`python -m baselines.map_check`):
+
+- **TRIVIAL** — kenar yolu güvenli → sabit politika kazanır, öğrenme yok
+- **KOLAY** — kenar kapalı ama sıfır-riskli optimal yol hâlâ var → gerçek yol
+  bulma gerekiyor, risk/uzunluk ödünleşmesi yok
+- **ZOR** — sıfır-riskli optimal yol YOK → ajan risk ile uzunluk arasında
+  **gerçek bir karar** vermek zorunda 🔑
+
+| Senaryo | TRIVIAL | KOLAY | **ZOR** |
 |---|---:|---:|---:|
-| Düz çapraz (naif "hedefe doğru git") | **24.7%** | 43.4% | 100 |
-| Rastgele monoton yol (baseline) | **21.2%** | 37.9% | 100 |
-| **Dijkstra oracle** | **100.0%** | **100.0%** | **100** |
+| 3 radar, iç bölgede (**senin haritan gibi**) | **100%** | 0% | **0%** |
+| 3 radar, kenara da yaklaşabiliyor | 75% | 19% | 7% |
+| 5 radar, kenara da yaklaşabiliyor | 56% | 34% | 10% |
+| 8 radar, kenara da yaklaşabiliyor | 32% | 51% | 17% |
+| **3 radar, 2x büyük halka (440/280)** | 43% | 24% | **33%** |
 
-🔑 **En kritik bulgu: bu haritada risksiz VE optimal uzunlukta yol VAR.**
-Sağ-üst köşeden dolaşan L yolu (önce 50 adım sağa, sonra 50 adım aşağı) hiçbir
-radar halkasına değmiyor ve yine tam 100 adım. Aslında tüm monoton yolların
-**%1.07'si** (≈10²⁷ tane) sıfır riskli.
+👉 **İki net sonuç:**
 
-Bunun üç sonucu var:
+1. **Radarları iç bölgeye koymak haritayı her seferinde trivial yapıyor**
+   (%100). Random radar'a geçmek tek başına yetmez — radarlar **kenarı da
+   kapatabilmeli**.
+2. **En güçlü kaldıraç halka boyutu.** Halkaları 2x büyütmek "zor" oranını
+   %0'dan %33'e çıkarıyor — radar sayısını 8'e çıkarmaktan (%17) daha etkili.
 
-1. **Öğrenilecek şey gerçek ve büyük.** Baseline takım başarısı %37.9, tavan
-   %100. Öğrenme eğrisi net görünecek, "hiçbir şey öğrenmedi mi öğrendi mi"
-   tartışması olmayacak.
-2. **Naif shaping ile radar kaçınma ÇATIŞMIYOR.** Manhattan-potansiyelli
-   shaping bütün monoton yolları eşit görür, yani ajanı çapraza itmez —
-   sadece "hedefe doğru ilerle" der. MARL-Pathfinding'de shaping en zor
-   kısımdı; burada bedava geliyor.
-3. ⚠️ **Sabit haritada koordinasyon içeriği SIFIR.** İki uçak da aynı güvenli
-   yoldan giderse ikisi de %100 varır. Yani **IQL, VDN ve QMIX bu haritada
-   büyük ihtimalle aynı sonucu verecek.** Bu bir hata değil, matematiksel bir
-   gerçek — ve §6'nın varlık sebebi.
+Bu, MARL-Pathfinding'in §0.3'teki "zor alt küme" metodolojisinin birebir
+analoğu ve aynı sonucu veriyor: **metrikleri zor alt kümede raporla, genel
+ortalamada her şey %100 çıkar ve hiçbir şey öğrenmemiş olursun.**
 
 ### 0.4 Peki VDN/QMIX niye gerekli? — kuplaj sorunu ve çözümü
 

@@ -4,12 +4,13 @@
 multi-agent reinforcement learning projesi.
 
 ```
-1000x1000 grid  ·  STEP_SIZE=20  ->  51x51 latis
-B (-500, 500) = (0,0)  ->  H (500, -500) = (50,50)   |  optimal 100 adim
+1000x1000 grid, TAM COZUNURLUK (1 hucre = 1 birim)
+B (-500, 500) = (0,0)  ->  H (500, -500) = (999,999)  |  optimal 1998 adim
 
-R1 (-280, 220)  R2 (200, 100)  R3 (-100, -280)
-  dis halka 220x220 (11 hucre)  ->  %2.01 olum / adim
-  ic  halka 140x140 ( 7 hucre)  ->  %28.03 olum / adim
+R1 (280,220)  R2 (400,700)  R3 (780,400)     [hucre koordinati]
+  dis halka +-110 hucre  ->  %0.101 olum / adim
+  ic  halka +- 70 hucre  ->  %1.620 olum / adim
+  (kalibrasyon: halkayi BOYDAN BOYA gecersen toplam %20 / %90)
 ```
 
 İki uçak **aynı anda** kalkar, aynı yoldan gidebilir (çarpışma yok).
@@ -34,17 +35,22 @@ getirir. Amaç: hedefe ulaşırken radarlardan mümkün olduğunca uzak durmak.
 | 9 Görselleştirme | ⬜ |
 | 10 Random radar | ⬜ |
 
-## Ölçülmüş baseline'lar
+## 🚨 Ölçülmüş baseline'lar — sabit harita TRIVIAL
 
-`python -m baselines.map_check` ile yeniden üretilebilir:
+`python -m baselines.policies` ile yeniden üretilebilir:
 
-| Politika | Tek uçak hayatta kalma | Takım (≥1 varır) |
-|---|---:|---:|
-| Rastgele monoton yol | 21.2% | 37.9% |
-| Düz çapraz | 24.7% | 43.4% |
-| **Dijkstra oracle** | **100.0%** | **100.0%** |
+| Politika | Takım başarısı | Uzunluk | Dış/İç maruziyet |
+|---|---:|---:|---:|
+| Rastgele monoton yol | 10% | 657 (ölümle kesildi) | 148 / 122 |
+| **SABİT politika (hep sağ → hep aşağı)** | **100%** | **1998** | **0 / 0** |
+| **Dijkstra oracle** | **100%** | **1998** | **0 / 0** |
 
-Haritanın %14.0'ü tehlikeli; monoton yolların %1.07'si sıfır riskli.
+Sabit politika oracle'ın kendisi: B ve H karşılıklı köşelerde, üç radar da iç
+bölgede, dolayısıyla gridin kenarı **radarsız ve aynı zamanda en kısa** yol.
+Öğrenilecek bir ödünleşme yok. Detay ve çözüm: [Strike_Mission.md §0.3](Strike_Mission.md).
+
+Haritanın %14.7'si tehlikeli. `python -m baselines.map_check` rastgele radar
+konfigürasyonlarını tarayıp trivial/kolay/zor oranlarını raporlar.
 
 ## Kurulum
 
