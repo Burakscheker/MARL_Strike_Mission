@@ -80,17 +80,27 @@ def plot_training_curves(tag: str, window: int | None = None) -> str:
     w = window or max(5, len(ep) // 10)
 
     fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
+    # REFERANS CIZGILERI — bunlar olmadan egri yorumlanamaz. Bu haritada
+    # "hep sag, kenara dayaninca hep asagi" diyen SABIT politika zaten %100
+    # takim basarisi ve sifir olum aliyor (bkz. baselines/policies.py).
+    # Yani egrinin yukselmesi tek basina "ogrendi" demek DEGIL; tavan trivial
+    # olarak ulasilabilir durumda. Alt referans rastgele monoton politika.
     series = [
-        ("Takim basari orani (>=1 ucak hedefe vardi)", d["team_success"], COL_OK),
-        ("Ucak 1 olme orani", d["dead1"], COL_A1),
-        ("Ucak 2 olme orani", d["dead2"], COL_A2),
+        ("Takim basari orani (>=1 ucak hedefe vardi)", d["team_success"], COL_OK,
+         1.00, 0.20),
+        ("Ucak 1 olme orani", d["dead1"], COL_A1, 0.00, 0.90),
+        ("Ucak 2 olme orani", d["dead2"], COL_A2, 0.00, 0.90),
     ]
-    for ax, (title, y, col) in zip(axes, series):
+    for ax, (title, y, col, ref_const, ref_rand) in zip(axes, series):
+        ax.axhline(ref_const, color="#3ddc97", ls=":", lw=1.6,
+                   label="SABIT politika (= oracle, trivial tavan)")
+        ax.axhline(ref_rand, color="#ff5555", ls=":", lw=1.4,
+                   label="rastgele monoton (taban)")
         ax.scatter(ep, y, s=6, color=col, alpha=0.18, linewidths=0,
                    label="episode basina (ham)")
         ax.plot(ep, _rolling(y, w), color=col, lw=2.2,
                 label=f"hareketli ortalama (pencere {w})")
-        ax.set_ylim(-0.05, 1.05)
+        ax.set_ylim(-0.05, 1.08)
         ax.set_ylabel("oran")
         ax.set_title(title, loc="left", fontsize=11, color=FG)
         ax.grid(alpha=0.35)
