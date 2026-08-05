@@ -81,13 +81,15 @@ radar randomizasyonu aşamasında ele alınacaktır.
 
 ## 3. Aksiyonlar ve episode akışı
 
-Her canlı uçak dört ayrık aksiyondan birini seçer:
+Her canlı uçak dört hareket aksiyonundan birini seçer. Ortamın ayrıca yalnızca
+ölü uçaklar için açtığı dahili bir `NOOP` aksiyonu vardır:
 
 ```text
 0 = yukarı    (x, y + 1)
 1 = sağ       (x + 1, y)
 2 = aşağı     (x, y - 1)
 3 = sol       (x - 1, y)
+4 = NOOP      (yalnızca ölü uçakta geçerli)
 ```
 
 - Hareket çözünürlüğü her adımda 1 grid birimidir.
@@ -169,7 +171,7 @@ Başlangıç ağları:
 
 ```text
 Actor:
-observation → Linear(128) → Tanh → Linear(128) → Tanh → Linear(4)
+observation → Linear(128) → Tanh → Linear(128) → Tanh → Linear(5)
 
 Central critic:
 global state → Linear(256) → Tanh → Linear(256) → Tanh → Linear(1)
