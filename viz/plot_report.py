@@ -151,18 +151,25 @@ def plot_demo_paths(tag: str, cols: int = 5) -> str:
         demos = json.load(f)
 
     rows = (len(demos) + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(3.1 * cols, 3.4 * rows))
+    fig, axes = plt.subplots(rows, cols, figsize=(3.1 * cols, 3.9 * rows))
+    fig.subplots_adjust(hspace=0.45)
     axes = np.atleast_1d(axes).ravel()
 
     for ax, d in zip(axes, demos):
         _draw_map(ax)
-        for key, col, reached, alive in (
-            ("path1", COL_A1, d["reached1"], d["alive1"]),
-            ("path2", COL_A2, d["reached2"], d["alive2"]),
+        # KAYDIRMA: iki ucak cogu zaman BIREBIR ayni yoldan gidiyor
+        # (route_overlap = 1.0). Kaydirmadan cizilirse ikinci yol birincinin
+        # altinda tamamen kaybolur ve grafik "tek ucak var" gibi gorunur.
+        # 15 hucrelik kaydirma 1000'lik gridde gorsel olarak ihmal edilebilir.
+        off = 15 if d["route_overlap"] > 0.9 else 0
+        for key, col, reached, alive, dx in (
+            ("path1", COL_A1, d["reached1"], d["alive1"], -off),
+            ("path2", COL_A2, d["reached2"], d["alive2"], +off),
         ):
-            path = np.asarray(d[key])
+            path = np.asarray(d[key], dtype=float)
             if len(path) < 2:
                 continue
+            path = path + dx
             ax.plot(path[:, 1], path[:, 0], "-", color=col, lw=1.6, alpha=0.95)
             if not alive:      # dusuruldugu nokta
                 ax.plot(path[-1, 1], path[-1, 0], "x", color=COL_BAD,
@@ -191,6 +198,7 @@ def plot_demo_paths(tag: str, cols: int = 5) -> str:
         Line2D([], [], color=COL_OUTER, lw=2, label="dis halka (%20 giriste)"),
         Line2D([], [], color=COL_INNER, lw=2, label="ic halka (%90 giriste)"),
         Line2D([], [], color=COL_BAD, marker="*", ls="", ms=12, label="H hedef"),
+        Line2D([], [], color=FG, ls="", label="(yollar ortusuyorsa 15 hucre kaydirildi)"),
     ]
     n_ok = sum(d["team_success"] for d in demos)
     fig.suptitle(f"{tag} — egitim sonrasi {len(demos)} deterministik episode "

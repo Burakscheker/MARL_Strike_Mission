@@ -1,5 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
-runs/
 .DS_Store
+
+# runs/ git'e girmez (checkpoint'ler, .npy haritalar, uzun CSV'ler) AMA
+# grafikler girer — rapor/sunum icin GitHub'dan dogrudan gorunsun.
+runs/*
+!runs/viz/
+runs/viz/*
+!runs/viz/*.png
