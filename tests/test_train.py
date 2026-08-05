@@ -1,3 +1,4 @@
+import csv
 import math
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from agents.ppo import HAPPOTrainer, MAPPOTrainer
 from config import OBS_DIM
 from env.strike_env import StrikeMissionEnv
 from eval.evaluate import evaluate, evaluate_checkpoint
-from train import collect_rollouts, train
+from train import _evaluation_score, collect_rollouts, train
 
 
 class TestRolloutCollection(unittest.TestCase):
@@ -40,6 +41,19 @@ class TestRolloutCollection(unittest.TestCase):
 
 
 class TestTrainingRun(unittest.TestCase):
+    def test_evaluation_score_prefers_success_then_safety_then_speed(self):
+        safe = {
+            "team_success_rate": 1.0,
+            "aircraft_0_death_rate": 0.0,
+            "aircraft_1_death_rate": 0.0,
+            "mean_radar_entries": 0.0,
+            "mean_steps": 1988.0,
+            "mean_return": 127.0,
+        }
+        unsafe = dict(safe, aircraft_0_death_rate=0.1, mean_steps=1900.0)
+
+        self.assertGreater(_evaluation_score(safe), _evaluation_score(unsafe))
+
     def test_training_writes_checkpoint_config_and_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
@@ -52,13 +66,28 @@ class TestTrainingRun(unittest.TestCase):
                 device="cpu",
                 output_dir=output,
                 max_steps=4,
+                eval_episodes=1,
             )
 
             self.assertEqual(result["episodes"], 2)
             self.assertTrue((output / "checkpoint.pt").is_file())
+            self.assertTrue((output / "checkpoint_best.pt").is_file())
+            self.assertTrue((output / "checkpoint_last.pt").is_file())
             self.assertTrue((output / "config.json").is_file())
             self.assertTrue((output / "metrics.csv").is_file())
             self.assertGreater((output / "metrics.csv").stat().st_size, 0)
+            with (output / "metrics.csv").open(newline="", encoding="utf-8") as stream:
+                fieldnames = csv.DictReader(stream).fieldnames
+            self.assertTrue(
+                {
+                    "sampled_success_rate",
+                    "eval_success_rate",
+                    "eval_mean_deaths",
+                    "eval_mean_radar_entries",
+                    "eval_mean_steps",
+                    "is_best",
+                }.issubset(fieldnames)
+            )
 
 
 class TestEvaluation(unittest.TestCase):
