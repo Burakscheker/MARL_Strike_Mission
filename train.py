@@ -113,6 +113,7 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--eval-every", type=int, default=None)
     ap.add_argument("--eval-episodes", type=int, default=5)
+    ap.add_argument("--demo-episodes", type=int, default=C.DEMO_EPISODES)
     ap.add_argument("--max-steps", type=int, default=C.MAX_STEPS)
     ap.add_argument("--alert", action="store_true",
                     help="radar alarm kuplajini ac (Asama 6)")
@@ -155,6 +156,7 @@ def main():
 
     log_path = os.path.join(C.RUNS_DIR, f"{tag}_train_log.csv")
     dense_path = os.path.join(C.RUNS_DIR, f"{tag}_train_dense.csv")
+    ep_path = os.path.join(C.RUNS_DIR, f"{tag}_episodes.csv")
     log_f = open(log_path, "w", newline="", encoding="utf-8")
     log_w = csv.writer(log_f)
     log_w.writerow(["episode", "eps", *METRIC_KEYS])
@@ -162,6 +164,13 @@ def main():
     dense_w = csv.writer(dense_f)
     dense_w.writerow(["episode", "eps", "team_success_ma", "n_dead_ma",
                       "inner_ma", "steps_ma", "loss_ma"])
+    # EPISODE BASINA ham kayit — grafikte hem ham nokta hem hareketli ortalama
+    # cizilebilsin diye. Sadece hareketli ortalama loglamak, gurultunun ne kadar
+    # oldugunu gizler; sadece hami loglamak da egilimi gostermez.
+    ep_f = open(ep_path, "w", newline="", encoding="utf-8")
+    ep_w = csv.writer(ep_f)
+    ep_w.writerow(["episode", "eps", "team_success", "dead1", "dead2",
+                   "reached1", "reached2", "steps", "outer_total", "inner_total"])
 
     win = C.TRAIN_HARM_WINDOW
     ma = {k: deque(maxlen=win) for k in ("team", "dead", "inner", "steps", "loss")}
@@ -173,6 +182,12 @@ def main():
     for ep in range(1, episodes + 1):
         set_eps(agent, algo, min(1.0, ep / floor))
         info, losses = runner(env, agent, train=True)
+
+        ep_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
+                       int(info["team_success"]),
+                       int(not info["alive1"]), int(not info["alive2"]),
+                       int(info["reached1"]), int(info["reached2"]),
+                       info["steps"], info["outer_total"], info["inner_total"]])
 
         ma["team"].append(float(info["team_success"]))
         ma["dead"].append(float(info["n_dead"]))
@@ -188,6 +203,8 @@ def main():
                               f"{np.mean(ma['inner']):.1f}", f"{np.mean(ma['steps']):.1f}",
                               f"{np.mean(ma['loss']) if ma['loss'] else 0:.5f}"])
             dense_f.flush()
+            ep_f.flush()      # yoksa episode CSV'si ancak kosu bitince yazilir
+                              # ve uzun kosularda ilerleme hic gorunmez
             el = time.perf_counter() - t_start
             print(f"ep{ep:>6}  eps={current_eps(agent, algo):.3f}  "
                   f"takim(ma)={np.mean(ma['team'])*100:5.1f}%  "
@@ -211,9 +228,52 @@ def main():
 
     log_f.close()
     dense_f.close()
+    ep_f.close()
     el = time.perf_counter() - t_start
     print(f"\nbitti: {episodes} episode, {el/60:.1f} dk ({el/episodes:.2f} s/ep)")
-    print(f"log: {log_path}\n     {dense_path}")
+
+    # --- egitim SONRASI deterministik gosterim episode'lari (eps=0)
+    # Yollari JSON'a yazar; viz/plot_report.py bunlardan harita cizer.
+    demo_path = run_demo(env, agent, algo, args.demo_episodes, tag)
+    print(f"log: {log_path}\n     {dense_path}\n     {ep_path}\n     {demo_path}")
+
+
+def run_demo(env, agent, algo: str, episodes: int, tag: str) -> str:
+    """eps=0 ile N episode oynat, YOLLARI kaydet."""
+    import json
+    runner = RUNNER[algo]
+    out = []
+    print(f"\n--- {episodes} deterministik gosterim episode'u (eps=0) ---")
+    for i in range(episodes):
+        env.rng = np.random.default_rng(C.DEMO_SEED + i)
+        info, _ = runner(env, agent, train=False)
+        out.append({
+            "episode": i,
+            "team_success": bool(info["team_success"]),
+            "both_reached": bool(info["both_reached"]),
+            "reached1": bool(info["reached1"]), "reached2": bool(info["reached2"]),
+            "alive1": bool(info["alive1"]), "alive2": bool(info["alive2"]),
+            "steps": int(info["steps"]),
+            "outer1": int(info["outer1"]), "inner1": int(info["inner1"]),
+            "outer2": int(info["outer2"]), "inner2": int(info["inner2"]),
+            "surv1": float(info["surv1"]), "surv2": float(info["surv2"]),
+            "route_overlap": float(info["route_overlap"]),
+            # Yollar 2800 noktaya kadar cikabiliyor; her 5. noktayi almak
+            # cizim icin fazlasiyla yeterli ve JSON'u 5x kucultuyor.
+            "path1": [list(p) for p in info["path1"][::5]] + [list(info["path1"][-1])],
+            "path2": [list(p) for p in info["path2"][::5]] + [list(info["path2"][-1])],
+        })
+        print(f"  ep{i}: takim={'EVET' if info['team_success'] else 'hayir'}  "
+              f"A1={'vardi' if info['reached1'] else ('OLDU' if not info['alive1'] else 'timeout')}  "
+              f"A2={'vardi' if info['reached2'] else ('OLDU' if not info['alive2'] else 'timeout')}  "
+              f"adim={info['steps']}  maruziyet={info['outer1']+info['outer2']}/"
+              f"{info['inner1']+info['inner2']}")
+    p = os.path.join(C.RUNS_DIR, f"{tag}_demo_episodes.json")
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(out, f)
+    n_ok = sum(d["team_success"] for d in out)
+    print(f"  -> {n_ok}/{episodes} takim basarisi")
+    return p
 
 
 if __name__ == "__main__":
