@@ -39,4 +39,3 @@ VALUE_COEF = 0.5
 MAX_GRAD_NORM = 0.5
 
 RUNS_DIR = Path("runs")
-
