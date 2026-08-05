@@ -1,4 +1,7 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -170,6 +173,28 @@ class TestRewardsAndTerminal(unittest.TestCase):
     def test_goal_constant_matches_the_1000_cell_grid(self):
         self.assertEqual(GOAL, (499, -494))
         self.assertEqual((UP, RIGHT, DOWN, LEFT, NOOP), (0, 1, 2, 3, 4))
+
+
+class TestRendering(unittest.TestCase):
+    def test_map_renderer_writes_nonempty_png_with_trajectories(self):
+        os.environ.setdefault("MPLCONFIGDIR", tempfile.gettempdir())
+        os.environ.setdefault("XDG_CACHE_HOME", tempfile.gettempdir())
+        from viz.plot_map import plot_map
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "map.png"
+
+            result = plot_map(
+                output,
+                trajectories=[
+                    [START, (-499, 495), (-498, 495)],
+                    [START, (-500, 494), (-500, 493)],
+                ],
+            )
+
+            self.assertEqual(result, output)
+            self.assertTrue(output.is_file())
+            self.assertGreater(output.stat().st_size, 0)
 
 
 if __name__ == "__main__":

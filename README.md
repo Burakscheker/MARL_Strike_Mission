@@ -22,7 +22,9 @@ serbesttir.
 
 ## Durum
 
-Tasarım tamamlandı; uygulama planı inceleme sonrasında hazırlanacaktır.
+İlk çalışır sürüm hazırdır: ortam, MAPPO/HAPPO trainer'ları, rollout toplama,
+checkpoint, değerlendirme ve harita renderer'ı bulunur. Eğitilmiş model
+dosyaları repoya dahil değildir.
 
 Detaylı ve güncel tasarım: [Strike_Mission.md](Strike_Mission.md)
 
@@ -34,10 +36,55 @@ Detaylı ve güncel tasarım: [Strike_Mission.md](Strike_Mission.md)
 - Takım arkadaşının konumu ve durumu actor gözleminde paylaşılır.
 - MAPPO ve HAPPO için aynı ağ kapasitesi, seed'ler ve eğitim bütçesi.
 
-## Mevcut dosyalar
+## Kurulum
+
+Python 3.10 veya üstü gerekir.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Windows PowerShell aktivasyonu:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+## Test ve harita
+
+```bash
+python -m unittest discover -s tests -v
+python -m viz.plot_map --output runs/map.png
+```
+
+## Eğitim
+
+MAPPO ve HAPPO aynı episode bütçesiyle ayrı çıktı klasörlerinde çalıştırılır:
+
+```bash
+python train.py --algo mappo --episodes 10000 --rollout-episodes 32 --seed 0 --output runs/mappo_seed0
+python train.py --algo happo --episodes 10000 --rollout-episodes 32 --seed 0 --output runs/happo_seed0
+```
+
+Bir episode en fazla 3.000 adet 1-birim hareket içerir. Bu nedenle tam eğitim
+koşuları uzundur; önce testlerdeki kısa-horizon smoke koşularını doğrulayın.
+
+## Değerlendirme
+
+```bash
+python -m eval.evaluate --checkpoint runs/mappo_seed0/checkpoint.pt --episodes 1000 --output runs/mappo_seed0/eval
+```
+
+Değerlendirme `episodes.csv`, `summary.json` ve `report.md` üretir.
+
+## Temel dosyalar
 
 - `Strike_Mission.md`: onaylanan tasarım ve aşamalı yol haritası.
-- `viz/plot_map.py`: önceki tasarımdan kalan harita çizimi; yeni 1-birim
-  geometri uygulanırken güncellenecek.
-- `baselines/map_check.py`: önceki 20-birim/adım varsayımına dayanır; ortam
-  aşamasında yeni giriş-bazlı risk oracle'ıyla değiştirilecek.
+- `config.py`: geometri, ödül ve PPO sabitleri.
+- `env/strike_env.py`: eşzamanlı iki-uçak ortamı ve giriş-bazlı risk.
+- `agents/ppo.py`: ortak PPO altyapısı, MAPPO ve HAPPO.
+- `train.py`: eğitim ve checkpoint üretimi.
+- `eval/evaluate.py`: deterministik değerlendirme ve raporlama.
+- `viz/plot_map.py`: gerçek 1000×1000 harita çizimi.

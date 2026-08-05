@@ -54,7 +54,7 @@
 - Produces: `action_masks() -> np.ndarray` with shape `(2, 5)` and `state() -> np.ndarray`.
 - Observation shape: `(2, OBS_DIM)` where `OBS_DIM=23`; state is the flattened observations with shape `(46,)`.
 
-- [ ] **Step 1: Write failing geometry, mask, and simultaneous-motion tests**
+- [x] **Step 1: Write failing geometry, mask, and simultaneous-motion tests**
 
 ```python
 class TestGeometry(unittest.TestCase):
@@ -79,13 +79,13 @@ class TestMovement(unittest.TestCase):
         self.assertFalse(truncated)
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `python3 -m unittest tests.test_env -v`
 
 Expected: FAIL because `config` and `env.strike_env` do not exist.
 
-- [ ] **Step 3: Implement constants and exact half-open zone geometry**
+- [x] **Step 3: Implement constants and exact half-open zone geometry**
 
 ```python
 @dataclass(frozen=True)
@@ -104,7 +104,7 @@ Define `UP, RIGHT, DOWN, LEFT, NOOP = range(5)`, `GRID_MIN=-500`,
 `GRID_MAX=499`, `START=(-500,495)`, `GOAL=(499,-494)`, and the exact reward,
 risk, network, and PPO constants from `Strike_Mission.md` in `config.py`.
 
-- [ ] **Step 4: Implement reset, action masks, simultaneous movement, and observations**
+- [x] **Step 4: Implement reset, action masks, simultaneous movement, and observations**
 
 `StrikeMissionEnv.reset` must initialize `positions`, `alive`, `reached`,
 `steps`, the NumPy generator, and per-aircraft/per-radar `zones`. Build each
@@ -118,7 +118,7 @@ self_goal_delta(2), other_goal_delta(2), time(1),
 
 Normalize positions and deltas by `999`, time by `3000`, and zones by `2`.
 
-- [ ] **Step 5: Write failing one-roll, re-entry, cumulative-risk, and reward tests**
+- [x] **Step 5: Write failing one-roll, re-entry, cumulative-risk, and reward tests**
 
 ```python
 class SequenceRNG:
@@ -149,13 +149,13 @@ def test_outer_then_inner_survival_is_eight_percent(self):
     self.assertEqual(env.rng.calls, 2)
 ```
 
-- [ ] **Step 6: Run risk tests and verify RED**
+- [x] **Step 6: Run risk tests and verify RED**
 
 Run: `python3 -m unittest tests.test_env.TestRisk -v`
 
 Expected: FAIL because zone-transition risk is not implemented.
 
-- [ ] **Step 7: Implement entry-only risk and exact rewards**
+- [x] **Step 7: Implement entry-only risk and exact rewards**
 
 For each living aircraft compare the old and new zone for every radar. Roll
 `0.20` when the new zone is outer and differs from the old zone. Roll `0.90`
@@ -165,14 +165,14 @@ Reward begins at `-0.001`, adds signed distance deltas for aircraft alive at
 the start of the step, subtracts `25` per death, and adds `100` once when any
 surviving aircraft reaches `GOAL`.
 
-- [ ] **Step 8: Run the complete environment suite**
+- [x] **Step 8: Run the complete environment suite**
 
 Run: `python3 -m unittest tests.test_env -v`
 
 Expected: all tests pass, including fixed-seed reproducibility and observation
 shape/finite-value checks.
 
-- [ ] **Step 9: Commit the environment**
+- [x] **Step 9: Commit the environment**
 
 ```bash
 git add config.py env/strike_env.py tests/test_env.py baselines/map_check.py
@@ -192,7 +192,7 @@ git commit -m "feat(env): add entry-risk strike grid"
 - Produces: `Actor`, `CentralCritic`, `masked_categorical`, `RolloutBatch`, and `compute_gae`.
 - `Actor.forward(obs) -> logits[...,5]`; `CentralCritic.forward(state) -> values[...]`.
 
-- [ ] **Step 1: Write failing mask and network shape tests**
+- [x] **Step 1: Write failing mask and network shape tests**
 
 ```python
 def test_invalid_action_probability_is_zero(self):
@@ -207,13 +207,13 @@ def test_network_shapes(self):
     self.assertEqual(CentralCritic()(torch.zeros(3, STATE_DIM)).shape, (3,))
 ```
 
-- [ ] **Step 2: Run primitive tests and verify RED**
+- [x] **Step 2: Run primitive tests and verify RED**
 
 Run: `python3 -m unittest tests.test_ppo.TestNetworks -v`
 
 Expected: import failure because `agents.ppo` does not exist.
 
-- [ ] **Step 3: Implement minimal MLPs and masked categorical**
+- [x] **Step 3: Implement minimal MLPs and masked categorical**
 
 ```python
 def masked_categorical(logits, mask):
@@ -225,7 +225,7 @@ def masked_categorical(logits, mask):
 Use two `Tanh` hidden layers of 128 units for actors and 256 units for the
 critic, with orthogonal initialization and a `0.01` actor output gain.
 
-- [ ] **Step 4: Write failing terminal/truncation GAE tests**
+- [x] **Step 4: Write failing terminal/truncation GAE tests**
 
 ```python
 def test_terminal_does_not_bootstrap(self):
@@ -243,20 +243,20 @@ def test_truncation_bootstraps(self):
     torch.testing.assert_close(returns, torch.tensor([2.98]))
 ```
 
-- [ ] **Step 5: Implement reverse-time GAE and RolloutBatch**
+- [x] **Step 5: Implement reverse-time GAE and RolloutBatch**
 
 Implement `advantages[t] = delta + gamma * gae_lambda * nonterminal * next_gae`
 in reverse order. `RolloutBatch` stores tensors for observations `(T,2,23)`,
 states `(T,46)`, masks `(T,2,5)`, actions/log-probs `(T,2)`, rewards,
 values, terminated flags, advantages, returns, and alive masks `(T,2)`.
 
-- [ ] **Step 6: Run PPO primitive tests**
+- [x] **Step 6: Run PPO primitive tests**
 
 Run: `python3 -m unittest tests.test_ppo.TestNetworks tests.test_ppo.TestGAE -v`
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit PPO primitives**
+- [x] **Step 7: Commit PPO primitives**
 
 ```bash
 git add agents/ppo.py tests/test_ppo.py
@@ -276,7 +276,7 @@ git commit -m "feat(ppo): add models rollout and GAE"
 - Produces: `save_checkpoint(path, trainer, config)` and `load_checkpoint(path, algorithm)`.
 - Both trainers own `actors: ModuleList`, one critic, actor optimizers, and a critic optimizer.
 
-- [ ] **Step 1: Write failing clipped-objective and MAPPO update tests**
+- [x] **Step 1: Write failing clipped-objective and MAPPO update tests**
 
 ```python
 def test_clipped_surrogate_uses_ratio(self):
@@ -297,20 +297,20 @@ def test_mappo_update_changes_actor_and_critic(self):
     self.assertTrue(math.isfinite(metrics["actor_loss"]))
 ```
 
-- [ ] **Step 2: Run MAPPO tests and verify RED**
+- [x] **Step 2: Run MAPPO tests and verify RED**
 
 Run: `python3 -m unittest tests.test_ppo.TestMAPPO -v`
 
 Expected: missing `clipped_policy_loss` or `MAPPOTrainer`.
 
-- [ ] **Step 3: Implement shared critic and MAPPO actor updates**
+- [x] **Step 3: Implement shared critic and MAPPO actor updates**
 
 Use frozen old log-probabilities, normalized advantages over each actor's alive
 samples, five PPO epochs, seed-shuffled minibatches, entropy regularization,
 value clipping, and gradient norm clipping. Reject non-finite losses and
 gradients with `FloatingPointError`.
 
-- [ ] **Step 4: Write failing HAPPO sequential-factor test**
+- [x] **Step 4: Write failing HAPPO sequential-factor test**
 
 ```python
 def test_happo_factor_contains_first_actor_ratio(self):
@@ -322,26 +322,26 @@ def test_happo_factor_contains_first_actor_ratio(self):
     self.assertTrue(torch.isfinite(trainer.last_factor).all())
 ```
 
-- [ ] **Step 5: Implement seeded sequential HAPPO updates**
+- [x] **Step 5: Implement seeded sequential HAPPO updates**
 
 Shuffle actor order once per update. Begin `factor=torch.ones(T)`. After each
 actor update, recompute that actor's new log-probability on the full frozen
 rollout and multiply `factor` by `exp(new_logp-old_logp)` only where that actor
 was alive. Detach the factor before the next actor objective.
 
-- [ ] **Step 6: Add checkpoint round-trip test and implementation**
+- [x] **Step 6: Add checkpoint round-trip test and implementation**
 
 Save algorithm name, actor/critic state dicts, optimizer state dicts, config,
 and seed. Load with `map_location="cpu"`; assert the same deterministic action
 before and after loading.
 
-- [ ] **Step 7: Run all PPO tests**
+- [x] **Step 7: Run all PPO tests**
 
 Run: `python3 -m unittest tests.test_ppo -v`
 
 Expected: all tests pass with finite losses.
 
-- [ ] **Step 8: Commit trainers**
+- [x] **Step 8: Commit trainers**
 
 ```bash
 git add agents/ppo.py tests/test_ppo.py
@@ -363,7 +363,7 @@ git commit -m "feat: add MAPPO and HAPPO trainers"
 - Produces: CLI `python3 train.py --algo {mappo,happo} --episodes N --seed N`.
 - Produces: CLI `python3 -m eval.evaluate --checkpoint PATH --episodes N`.
 
-- [ ] **Step 1: Write failing rollout smoke test**
+- [x] **Step 1: Write failing rollout smoke test**
 
 ```python
 def test_collect_rollouts_returns_finite_batch(self):
@@ -375,38 +375,38 @@ def test_collect_rollouts_returns_finite_batch(self):
     self.assertTrue(torch.isfinite(batch.advantages).all())
 ```
 
-- [ ] **Step 2: Run smoke test and verify RED**
+- [x] **Step 2: Run smoke test and verify RED**
 
 Run: `python3 -m unittest tests.test_train -v`
 
 Expected: import failure because `train.py` does not exist.
 
-- [ ] **Step 3: Implement deterministic rollout collection**
+- [x] **Step 3: Implement deterministic rollout collection**
 
 Collect complete episodes, retaining the final critic bootstrap only for
 truncation. Keep one common timeline and write one batch tensor per field.
 Expose a small `max_steps` constructor override solely for smoke tests and
 debugging; production default remains `3000`.
 
-- [ ] **Step 4: Implement training CLI and logs**
+- [x] **Step 4: Implement training CLI and logs**
 
 Parse only algorithm, episodes, rollout episodes, seed, device, and output
 directory. Write `metrics.csv` after each update and `checkpoint.pt` at the end.
 Store the exact runtime config beside the checkpoint as JSON.
 
-- [ ] **Step 5: Implement deterministic evaluation**
+- [x] **Step 5: Implement deterministic evaluation**
 
 Use actor argmax under masks. Record team success, both reached, per-aircraft
 death/reach, radar entries, timeout, episode steps, return, route overlap, and
 wall time. Write raw CSV plus `summary.json` and `report.md`.
 
-- [ ] **Step 6: Run end-to-end smoke tests**
+- [x] **Step 6: Run end-to-end smoke tests**
 
 Run: `python3 -m unittest tests.test_env tests.test_ppo tests.test_train -v`
 
 Expected: all tests pass; a two-episode MAPPO and HAPPO update has finite losses.
 
-- [ ] **Step 7: Commit training and evaluation**
+- [x] **Step 7: Commit training and evaluation**
 
 ```bash
 git add train.py eval/evaluate.py tests/test_train.py .gitignore
@@ -426,23 +426,23 @@ git commit -m "feat: add training and evaluation pipeline"
 - Consumes: all geometry from `config.py`; embeds no duplicate coordinates.
 - Produces: `python3 -m viz.plot_map --output runs/map.png`.
 
-- [ ] **Step 1: Replace the obsolete 51×51 renderer**
+- [x] **Step 1: Replace the obsolete 51×51 renderer**
 
 Draw `[-500,499]` bounds, exact 220/140 half-open rectangles, both aircraft at
 `(-500,495)`, target `(499,-494)`, and optional trajectory arrays. Import every
 coordinate and dimension from `config.py`.
 
-- [ ] **Step 2: Add a non-interactive render smoke test**
+- [x] **Step 2: Add a non-interactive render smoke test**
 
 Call `plot_map(output=temp_path)` under Matplotlib `Agg`; assert the PNG exists
 and has non-zero size.
 
-- [ ] **Step 3: Update README commands**
+- [x] **Step 3: Update README commands**
 
 Document environment test, smoke training, full MAPPO/HAPPO training,
 evaluation, and map rendering commands. Label long 1-unit runs explicitly.
 
-- [ ] **Step 4: Run full verification**
+- [x] **Step 4: Run full verification**
 
 Run:
 
@@ -455,7 +455,7 @@ git diff --check
 Expected: zero test failures, renderer exit code 0, non-empty `runs/map.png`,
 and no whitespace errors.
 
-- [ ] **Step 5: Commit documentation and renderer**
+- [x] **Step 5: Commit documentation and renderer**
 
 ```bash
 git add viz/plot_map.py README.md tests/test_env.py

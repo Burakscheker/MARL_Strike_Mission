@@ -1,87 +1,111 @@
-﻿"""51x51 latisin Burak'in orijinal haritasiyla cakistigini GORSEL olarak dogrula."""
+import argparse
+from pathlib import Path
+
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-STEP, N = 20, 51
-RADARS = [("R1", -280, 220), ("R2", 200, 100), ("R3", -100, -280)]
-OH, IH = 5, 3          # hucre yaricapi (110/20 -> 5, 70/20 -> 3)
+from config import (
+    GOAL,
+    GRID_MAX,
+    GRID_MIN,
+    INNER_HALF_SIZE,
+    OUTER_HALF_SIZE,
+    RADAR_CENTERS,
+    START,
+)
 
 
-def cell_to_xy(r, c):
-    return (-500 + STEP * c, 500 - STEP * r)
+def plot_map(output, trajectories=None):
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure, axis = plt.subplots(figsize=(10, 10))
+    axis.set_facecolor("#081018")
+    figure.patch.set_facecolor("#081018")
+
+    for coordinate in range(GRID_MIN, GRID_MAX + 1, 100):
+        axis.axhline(coordinate, color="#24483b", linewidth=0.5, alpha=0.65)
+        axis.axvline(coordinate, color="#24483b", linewidth=0.5, alpha=0.65)
+
+    for index, (center_x, center_y) in enumerate(RADAR_CENTERS, start=1):
+        axis.add_patch(
+            Rectangle(
+                (center_x - OUTER_HALF_SIZE, center_y - OUTER_HALF_SIZE),
+                OUTER_HALF_SIZE * 2,
+                OUTER_HALF_SIZE * 2,
+                facecolor="#f59e0b",
+                edgecolor="#f59e0b",
+                linewidth=2,
+                alpha=0.16,
+            )
+        )
+        axis.add_patch(
+            Rectangle(
+                (center_x - INNER_HALF_SIZE, center_y - INNER_HALF_SIZE),
+                INNER_HALF_SIZE * 2,
+                INNER_HALF_SIZE * 2,
+                facecolor="#ef4444",
+                edgecolor="#ef4444",
+                linewidth=2,
+                alpha=0.20,
+            )
+        )
+        axis.plot(center_x, center_y, "+", color="#d1fae5", markersize=13, markeredgewidth=2)
+        axis.text(
+            center_x + 14,
+            center_y - 24,
+            "R{} ({}, {})".format(index, center_x, center_y),
+            color="#d1fae5",
+            fontsize=9,
+        )
+
+    if trajectories:
+        colors = ("#38bdf8", "#a78bfa")
+        for index, route in enumerate(trajectories):
+            if not route:
+                continue
+            x_values, y_values = zip(*route)
+            axis.plot(
+                x_values,
+                y_values,
+                color=colors[index % len(colors)],
+                linewidth=2,
+                label="Uçak {} rotası".format(index + 1),
+                zorder=5,
+            )
+
+    axis.scatter(*START, s=120, color="#38bdf8", edgecolor="white", zorder=6)
+    axis.text(START[0] + 18, START[1] - 32, "B ×2 {}".format(START), color="#38bdf8")
+    axis.scatter(*GOAL, s=210, marker="*", color="#fb7185", edgecolor="white", zorder=6)
+    axis.text(GOAL[0] - 190, GOAL[1] + 26, "H {}".format(GOAL), color="#fb7185")
+
+    axis.set_xlim(GRID_MIN, GRID_MAX)
+    axis.set_ylim(GRID_MIN, GRID_MAX)
+    axis.set_aspect("equal")
+    axis.set_xlabel("x", color="#9ca3af")
+    axis.set_ylabel("y", color="#9ca3af")
+    axis.set_title(
+        "Strike Mission — 1000×1000 grid, giriş-bazlı radar riski",
+        color="#d1fae5",
+    )
+    axis.tick_params(colors="#9ca3af")
+    for spine in axis.spines.values():
+        spine.set_color("#3f8067")
+    if trajectories:
+        axis.legend(loc="lower left", framealpha=0.25)
+    figure.savefig(output, dpi=140, bbox_inches="tight", facecolor=figure.get_facecolor())
+    plt.close(figure)
+    return output
 
 
-def to_cell(x, y):
-    return ((500 - y) // STEP, (x + 500) // STEP)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Render the Strike Mission map")
+    parser.add_argument("--output", default="runs/map.png")
+    args = parser.parse_args(argv)
+    print(plot_map(args.output))
 
 
-RC = [(n,) + to_cell(x, y) for n, x, y in RADARS]
-
-
-def zone(r, c):
-    z = 0
-    for _, rr, cc in RC:
-        if abs(r - rr) <= IH and abs(c - cc) <= IH:
-            return 2
-        if abs(r - rr) <= OH and abs(c - cc) <= OH:
-            z = 1
-    return z
-
-
-plt.style.use("dark_background")
-fig, ax = plt.subplots(figsize=(11, 11))
-ax.set_facecolor("#0d1117")
-
-# latis noktalari (soluk)
-for i in range(0, N, 5):
-    ax.axhline(500 - STEP * i, color="#1f6f4a", lw=0.4, alpha=0.5)
-    ax.axvline(-500 + STEP * i, color="#1f6f4a", lw=0.4, alpha=0.5)
-
-# radar kareleri â€” latis hucrelerinden URETILDI (elle cizilmedi)
-for name, rr, cc in RC:
-    for half, col, lab in ((OH, "#ffa500", "dis 220x220"), (IH, "#3ddc97", "ic 140x140")):
-        x0, y0 = cell_to_xy(rr + half, cc - half)      # sol alt
-        w = h = (2 * half + 1 - 1) * STEP + STEP       # kenar uzunlugu birim
-        ax.add_patch(Rectangle((x0 - STEP / 2, y0 - STEP / 2), w, h,
-                               fill=True, facecolor=col, alpha=0.10,
-                               edgecolor=col, lw=2))
-    cx, cy = cell_to_xy(rr, cc)
-    ax.plot(cx, cy, "+", color="white", ms=12, mew=2)
-    ax.text(cx + 12, cy - 26, f"{name}  hucre({rr},{cc})", color="white", fontsize=9)
-
-# --- yollar
-diag = [(i, i) for i in range(N)]
-Lsafe = [(0, c) for c in range(N)] + [(r, N - 1) for r in range(1, N)]
-
-for path, col, lab in ((diag, "#ff5555", "duz capraz â€” hayatta kalma %24.7"),
-                       (Lsafe, "#58a6ff", "guvenli L yolu â€” %100, ayni 100 adim")):
-    xs, ys = zip(*[cell_to_xy(*p) for p in path])
-    ax.plot(xs, ys, "-", color=col, lw=2.5, label=lab, zorder=5)
-    hot = [p for p in path if zone(*p) > 0]
-    if hot:
-        hx, hy = zip(*[cell_to_xy(*p) for p in hot])
-        ax.plot(hx, hy, "x", color=col, ms=9, mew=2, zorder=6)
-
-bx, by = cell_to_xy(0, 0)
-hx2, hy2 = cell_to_xy(50, 50)
-ax.plot(bx, by, "o", color="#58a6ff", ms=14, zorder=7)
-ax.text(bx + 15, by - 35, "B (0,0)", color="#58a6ff", fontsize=13, weight="bold")
-ax.plot(hx2, hy2, "*", color="#ff7b72", ms=20, zorder=7)
-ax.text(hx2 - 150, hy2 + 25, "H (50,50)", color="#ff7b72", fontsize=13, weight="bold")
-
-ax.set_xlim(-520, 520)
-ax.set_ylim(-520, 520)
-ax.set_aspect("equal")
-ax.set_title("51x51 latis (STEP=20) â€” radar kareleri hucrelerden URETILDI\n"
-             "220/20=11 hucre, 140/20=7 hucre, uc merkez de tam latis uzerinde",
-             fontsize=12)
-ax.legend(loc="lower left", fontsize=10, framealpha=0.3)
-ax.tick_params(colors="#8b949e")
-import os
-os.makedirs("runs", exist_ok=True)
-out = os.path.join("runs", "lattice_check.png")
-fig.savefig(out, dpi=110, bbox_inches="tight", facecolor="#0d1117")
-print("yazildi:", out)
-
+if __name__ == "__main__":
+    main()
