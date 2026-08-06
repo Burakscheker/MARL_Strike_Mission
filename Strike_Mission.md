@@ -638,113 +638,198 @@ yeni bir haritada gerçek yol planlaması yapmak zorunda.
 
 ### 11.1 Ölçülen fizibilite — önce buna bak
 
-`python -m baselines.scan_random_maps` (her satır 12 rastgele harita):
+`python -m baselines.scan_random_maps --mode per_entry` (satır başına 8 harita,
+`greedy_path` düzeltmesinden **sonra** — bkz. §11.3b):
 
 | Radar | Güvenli hücre | İç halkada | **Oracle hayatta kalma** | medyan |
 |---:|---:|---:|---:|---:|
-| 5 | 80.1% | 8.9% | **100.0%** | 100% |
-| 10 | 65.1% | 16.8% | **93.7%** | 100% |
-| 20 | 41.8% | 31.0% | **57.3%** | 64% |
-| 30 | 28.5% | 41.8% | **29.9%** | 29% |
-| **40** | **17.7%** | **52.2%** | **17.6%** | **9.3%** |
+| 5 | 80.5% | 8.7% | **97.5%** | 100% |
+| 10 | 64.2% | 17.1% | **92.5%** | 100% |
+| 20 | 41.9% | 30.7% | **65.0%** | 80% |
+| 30 | 28.6% | 41.8% | **34.6%** | 8.0% |
+| **40** | **18.0%** | **52.2%** | **32.1%** | **7.2%** |
 
 Halka boyutu, radar sayısından daha güçlü bir kaldıraç:
 
-| Radar | Halka (dış/iç) | Güvenli | Oracle hayatta kalma |
+| Radar | Halka (dış/iç, dünya birimi) | Güvenli | Oracle hayatta kalma |
 |---:|---|---:|---:|
-| 40 | 60 / 38 | 57.8% | **87.3%** |
-| 40 | 80 / 50 | 38.6% | **63.4%** |
-| 40 | 110 / 70 | 17.7% | **17.6%** |
+| 40 | 120 / 76 | 57.8% | **81.0%** |
+| 40 | 160 / 100 | 38.5% | **58.3%** |
+| 40 | 220 / 140 | 18.0% | **32.1%** |
 
-> "Oracle hayatta kalma" = riski **minimize eden** yolun hayatta kalma
-> olasılığı. Ajan bundan iyisini yapamaz — **tavan bu.**
+> "Oracle hayatta kalma" = `MAX_STEPS`'e sığan, riski **minimize eden** yolun
+> hayatta kalma olasılığı. Ajan bundan iyisini yapamaz — **tavan bu.**
 
-👉 **40 radar × 110/70 halka çalışır ama tavan çok alçak:** en iyi olası
-politika bile %17.6 (medyan %9.3) hayatta kalıyor. Takım tavanı
-`1−(1−0.176)² ≈ %30`. Problem çözümsüz değil, ama ödül sinyali **çok
-gürültülü** olacak — mükemmel oynayan bir ajan bile episode'ların %70'inde
-başarısız görünür.
+👉 **40 radar × 220/140 çalışır, ama dağılım çok çarpık.** Ortalama %32.1
+iken **medyan sadece %7.2**. Sebep `per_entry`'nin ayrık yapısı: hayatta
+kalma `0.8^(dış giriş) × 0.1^(iç giriş)` biçiminde **kuantize**. Gözlenen
+tipik değerler:
 
-### 11.2 🚨 Ödül kalibrasyonu BOZULUYOR — düzeltilmeli
+| Oracle'ın mecbur kaldığı geçiş | Hayatta kalma | Sıklık |
+|---|---:|---|
+| 1 dış halka | 0.80 | şanslı haritalar |
+| 2 dış halka | 0.64 | |
+| 1 dış + 1 **iç** | 0.08 | **tipik (medyan)** |
+| 2 dış + 1 iç | 0.064 | |
 
-Bu, akşam koda geçmeden önce çözülmesi gereken tek gerçek tasarım sorunu.
+Yani **haritaların yarısından fazlasında en iyi yol bile bir iç halkayı
+delmek zorunda** — ve iç halka %90 ölüm. Takım tavanı: ortalama haritada
+`1−(1−0.321)² = %53.9`, medyan haritada `1−(1−0.08)² = %15.4`.
 
-Mevcut ödüllerle, 40 radarlı haritada iki seçeneğin beklenen değeri:
+Bu, `surv_ratio` metriğini (§11.6) **zorunlu** kılıyor: ham başarı oranı
+harita şansıyla 10 kat oynuyor, ajanın iyi mi kötü mü olduğunu söylemiyor.
+
+### 11.2 🚨 Ödül kalibrasyonu — iki gerçek sorun
+
+> ⚠️ Bu bölümün ilk hali hatalıydı: shaping terimini hesaba katmıyor ve
+> düzeltilmemiş oracle sayılarını kullanıyordu. Aşağısı düzeltilmiş hali.
+
+**Sorun A — Φ potansiyeli SATÜRE oluyor (asıl sorun).**
+
+`_phi()` şöyle: `Φ = 1 − min(1, dist/max_man)`, `max_man = 2(n−1) = 1998`.
+Ama `dist` **risk-mesafesi**: `1 adım + 1500 × p(giriş)`. Bir iç halkaya
+girmek `1500 × 0.9 = 1350` adım-eşdeğeri ekliyor. 40 radarlı haritada
+B'den hedefe risk-mesafe ≈ `1998 + 1500×(0.2+0.9) ≈ 3648`, yani
+`dist/max_man ≈ 1.83 > 1` → **Φ(B) = 0 ve haritanın büyük kısmında 0'da
+çakılı kalıyor.** Shaping gradyanı tam da ihtiyaç duyulan yerde ölü.
+
+Aynı `min(1.0, d_own/max_man)` kırpması gözlem skaları #11'i de satüre
+ediyor — ajan "hedefe ne kadar kaldı"yı göremiyor.
+
+**Düzeltme:** normalizasyon episode'un KENDİ haritasına göre yapılmalı:
+```python
+self.dist_scale = max(float(self.dist[START]), 1.0)   # reset()'te, harita başına
+Φ = 1.0 - min(1.0, dist[pos] / self.dist_scale)       # Φ(B)≈0, Φ(H)=1 her haritada
+```
+Potential-based shaping **herhangi bir Φ** için politika-değişmez (Ng ve ark.),
+yani bu düzeltme kanıtı bozmaz — sadece sinyali geri getirir.
+
+**Sorun B — oyalanma teşviki.** Φ düzeltildikten sonra bile, medyan haritada
+(oracle %8) beklenen değerler:
+
+| | uçmak | oyalanmak |
+|---|---:|---:|
+| ilk/ikinci varış | +7.7 | 0 |
+| ölüm cezaları | −36.1 | 0 |
+| adım maliyeti | −20.2 | −28.0 |
+| risk_shaping peşin ödemesi | −33.0 | 0 |
+| `R_TIMEOUT` | 0 | −10.0 |
+| **toplam** | **≈ −81.6** | **≈ −38.0** |
+
+Oyalanmak **43 puan daha kârlı**. Bunu kapatan iki kaldıraç var:
+
+1. **`R_TIMEOUT = −50`** — denememek, deneyip ölmekten pahalı olmalı.
+2. **`risk_shaping` riski İKİ KEZ sayıyor.** `R_RISK_COEF × p` peşin
+   ödeniyor *ve* ayrıca stokastik `R_DEATH` zarı atılıyor. `R_RISK_COEF = 15
+   = |R_DEATH|` olduğu için ajanın efektif risk kaçınması **spec'in 2 katı**.
+   config'de bu "varyans azaltma" diye belgelenmiş ama varyans azaltma
+   normalde stokastik terimi *değiştirir*, üstüne *eklemez*.
+   **Öneri:** `R_RISK_COEF = 7.5` (yarısı) — dense sinyal korunur, toplam
+   risk kaçınması spec'e döner. Ablation olarak 0 ve 15 de koşulur.
+
+`R_DEATH = −15` ve `R_FIRST_GOAL = +50` aynı kalır (ölüm cezasını büyütmek
+ajanı daha ürkek yapar, ters etki).
+
+### 11.3 Risk muhasebesi: **seviye tabanlı, çakışma TOPLANMAZ** ✅
+
+> **Karar (Burak, 2026-08-06):** *"İsterse aynı anda 4 radarın detection
+> zone'unda olsun yine ölme ihtimali yüzde 20, toplamıyoruz."*
+
+Bir hücrenin tehlikesi **sadece hangi halkada olduğuyla** belirlenir, kaç
+radarın kapsadığıyla değil:
 
 ```
-UÇMAK    : 0.31 × (+50)  +  2 × 0.83 × (−15)   ≈  −9.4
-OYALANMAK: güvenli hücrelerde dolaş, timeout ye  =  −10.0
+zone(hücre) = max(tüm radarlar üzerinden)    0 = güvenli, 1 = dış, 2 = iç
 ```
 
-Fark sadece **0.6 puan.** Yani ajan için "hedefe gitmeye çalışmak" ile
-"güvenli bir köşede dolanıp süreyi doldurmak" neredeyse aynı değerde —
-üstelik `R_TIMEOUT (−10)` `R_DEATH (−15)`'ten **daha ucuz**. Bu, ajanı
-"hiç deneme, güvende kal" politikasına iten dejenere bir teşvik.
+**Bu zaten kodda böyle.** `risk_oracle.build_zone_map()` radarları
+`np.maximum` ile bindiriyor, `move_risk()` zarı yalnızca **seviye arttığında**
+atıyor (`0→1` %20, `0→2` ve `1→2` %90). Yani Aşama 11 için risk motorunda
+**değişiklik gerekmiyor** — tek değişen, radar setinin her episode yeniden
+örneklenmesi.
 
-**Düzeltme:** `R_TIMEOUT = −50`. Denememek her zaman deneyip ölmekten
-pahalı olmalı.
+> Alternatif "her radar ayrı bir tespit sistemi, üst üste binen 4 radar → 4
+> ayrı zar" muhasebesi önerilmişti; Burak tarafından **reddedildi.** Kayıt
+> için: o model tavanı belirgin şekilde düşürüyordu.
+
+**Kuralın en önemli sonucu — halkalar BİRLEŞİYOR.** 40 radarın dış halkaları
+üst üste bindiği için harita "40 ayrı engel" değil **birkaç büyük birleşik
+bölge**. `per_entry` ile bir bölgeye girmek %20'ye mal olur ve **içeride ne
+kadar dolaşırsan bedava**. Optimal davranış bu yüzden "girdiğin bölgeden
+gereksiz çıkma, aynı sınırı tekrar tekrar geçme".
+
+Öğrenilecek beceri **topolojik**: kaç ayrı bölge sınırı geçtiğin önemli,
+o bölgelerde kaç adım kaldığın değil. Bu, `per_step` ablasyonundan niteliksel
+olarak farklı bir problem (orada beceri "bölgeyi teğetten sıyırmak" olurdu) —
+ikisinin karşılaştırması rapora girmeli.
+
+**Kalkış istisnası — düzeltilecek.** 40 radarla B'nin bir halkanın içinde
+kalma olasılığı yüksek. Hem ortam (`_prev_zone`) hem `survival_prob` şu anda
+`prev = 0`'dan başlıyor; B iç halkadaysa uçak daha ilk adımda %90'lık zar
+yiyor — halbuki kendi üssünden kalkıyor. İkisi de `prev = zone[START]` ile
+başlamalı.
+
+### 11.3b 🐛 `greedy_path` kenar-maliyeti hatası — BULUNDU ve DÜZELTİLDİ
+
+Fizibilite taramasını yazarken tutarsızlık çıktı: 160/100 halka, **daha
+büyük** olan 220/140'tan kötü sonuç veriyordu. Küçük radar daha güvenli
+olmak zorunda, yani ölçüm hatalıydı.
+
+**Kök neden:** `greedy_path` her adımda `d` değeri en küçük komşuya iniyordu
+(tepe-inişi). Maliyet **düğüm**-ağırlıklı olsa yaklaşık doğruydu; ama bizim
+maliyetimiz **kenar**-ağırlıklı — bir hücreye girmenin bedeli hangi bölgeden
+geldiğine bağlı. `per_entry`'de bir halkaya girmek `1 + 1500×0.9 = 1351`
+adım-eşdeğeri; `d`'si azıcık küçük diye o komşuya atlamak yolu mahvediyordu.
+Doğrusu Bellman denkleminin kendisi:
 
 ```
-UÇMAK    ≈ −9.4
-OYALANMAK = −50.0        -> ucmak net kazancli
+d[u] = min_v ( cost(u→v) + d[v] )      # argmin alınırken kenar maliyeti de toplanmalı
 ```
 
-`R_DEATH = −15` aynı kalır (ölüm cezasını büyütmek ajanı daha da ürkek
-yapar, ters etki). `R_FIRST_GOAL = +50` de aynı.
+**Ölçüldü** (40 rastgele radar, aynı haritalar):
 
-### 11.3 Risk muhasebesi değişmeli: **per-radar giriş**
+| mod | eski `greedy_path` | düzeltilmiş |
+|---|---:|---:|
+| per_entry | 0.0008 | **0.0800** |
+| per_step | 0.0063 | **0.5028** |
 
-Şu anki kural "bölge SEVİYESİ artınca zar at" (0→1→2). Radarlar
-**çakışmadığı** sürece doğruydu. 40 çakışan radarda **yanlış**: bir radarın
-alanındayken ikinci bir radarın alanına girersen seviye 1'de kalır ve zar
-atılmaz — halbuki seni **iki ayrı sistem** tespit etti.
-
-**Yeni kural:** her radar **ayrı** bir tespit sistemi. Uçak bir radarın dış
-halkasına **ilk kez** girdiğinde o radar için %20'lik zar; iç halkasına ilk
-kez girdiğinde %90'lık zar. Aynı adımda birden fazla radara girilirse her
-biri ayrı zar.
-
-- **Tetiklenme kalıcı.** Bir radar seni bir kez angaje ettiyse, çıkıp
-  tekrar girince yeniden zar atmaz. Gerekçe: patronun kuralı ("girdiysen
-  girmişsindir, süre önemsiz") aynı radar için de geçerli; aksi halde ajan
-  sınırda titrediği için cezalandırılır ki bu öğrenmeyi bozar.
-- **B/H bölge içindeyse:** 40 radarla B'nin bir dış halkada olma olasılığı
-  ~%39. Kalkış anında zar **atılmaz** (kendi üssünden kalkıyor); o radarlar
-  başlangıçta "tetiklenmiş" sayılır.
-
-**Uygulama — ucuz.** Radar dikdörtgenleri numpy'da (40,4) sınır dizisi olarak
-tutulur; her adımda `inside = (|Δrow| ≤ half) & (|Δcol| ≤ half)` tek bir
-vektör işlemi, `yeni = inside & ~tetiklenmis`. Ajan başına iki bool dizi
-(dış/iç, 40 uzunluk) yeterli.
-
-**Oracle tarafı da ucuz ve TAM.** Bir dikdörtgene "yukarıdan girmek" = tam
-olarak o dikdörtgenin üst satırına basmak. Yani her radar için 4 kenar
-(üst satır / alt satır / sol sütun / sağ sütun) kenar-maliyeti dizisine +1
-ekler. Çakışma sorun değil çünkü her radar bağımsız sayılıyor. Harita başına
-`O(radar)`, yani bedava — `baselines/scan_random_maps.py` bunu zaten böyle
-yapıyor.
+Oracle tavanı **100 kata kadar düşük** raporlanıyordu. Tavan yanlışsa
+`surv_ratio` da yanlış — yani bu hata bulunmasaydı ajanın "oracle'ın kaçta
+kaçı" sorusu baştan sona yanlış cevaplanacaktı. Sabit haritada da geçerli:
+`map_check.py`, `policies.py` ve `tests/test_env.py` aynı fonksiyonu
+kullanıyor, hepsinin sayıları yeniden üretilmeli.
 
 ### 11.4 Curriculum — kolay haritadan zora
 
-%17'lik tavanla **sıfırdan** başlamak, erken eğitimde neredeyse hiç pozitif
-örnek görmemek demek. MARL-Pathfinding'in dersine sadık kalıp radar sayısını
-rampalıyoruz:
+Medyan haritada %8'lik tavanla **sıfırdan** başlamak, erken eğitimde
+neredeyse hiç pozitif örnek görmemek demek. MARL-Pathfinding'in dersine
+sadık kalıp radar sayısını rampalıyoruz:
 
 ```python
 n_radar = round(10 + 30 * min(1.0, episode / (0.6 * total_episodes)))   # 10 -> 40
 ```
 
-10 radarda oracle %94 (bol pozitif örnek), 40'ta %17.6. Ajan önce "hedefe git
-ve halkalardan kaç" temel davranışını öğrenir, sonra yoğun haritaya taşınır.
-**Değerlendirme her zaman 40 radarda** yapılır — curriculum sadece eğitim
-örneklemesi, metrik değil.
+10 radarda oracle %92.5 ve **medyan %100** (bol pozitif örnek), 40'ta ortalama
+%32 / medyan %7. Ajan önce "hedefe git ve halkalardan kaç" temel davranışını
+öğrenir, sonra yoğun haritaya taşınır. **Değerlendirme her zaman 40 radarda**
+yapılır — curriculum sadece eğitim örneklemesi, metrik değil.
 
 ### 11.5 Episode başına maliyet
 
 Her episode yeni harita → `zone_map` + `risk_distance_map` yeniden hesaplanır.
-Ölçüldü: **0.21 s/harita** (40 radar, fast sweeping dahil). Episode ~5 s
-olduğu için ~%4 ek yük — kabul edilebilir. Onbellek artık işe yaramaz,
-`RISK_CACHE`/`ZONE_CACHE` devre dışı kalmalı.
+Ölçüldü: **~0.33 s/harita** (40 radar, 1000×1000 fast sweeping dahil; tarama
+betiği harita başına 3 farklı `risk_w` çözdüğü için orada ~1.0 s görünüyor).
+
+Bu **ihmal edilebilir değil**: 20 000 episode × 0.33 s ≈ **1.8 saat** sadece
+harita üretimi. İki hafifletme:
+- Radar setini örnekle, ama risk-mesafe haritasını **ajan başına değil harita
+  başına bir kez** çıkar (zaten öyle).
+- `max_iter`'ı erken çıkışla sınırla; sweeping tipik olarak 6–10 turda sabit
+  noktaya oturuyor, 120 tavanı sadece patolojik haritalar için.
+
+`RISK_CACHE`/`ZONE_CACHE` artık işe yaramaz — harita her episode değişiyor,
+onbellek **devre dışı bırakılmalı** (yoksa sessizce YANLIŞ haritayı okur;
+bu hata türü hiçbir yerde patlamaz, en tehlikelisi).
 
 ### 11.6 Metrikler — hangisi anlamlı kalır
 
@@ -765,20 +850,40 @@ mü söylenemez (oracle da %17.6 ise mükemmeldir).
 
 ### 11.7 Yapılacaklar listesi (akşam için)
 
-- [ ] `config.py`: `N_RADAR = 40`, `RADAR_RANDOM = True`, `R_TIMEOUT = −50`,
-      curriculum sabitleri, `RISK_CACHE = None`
+**Sırayla yapılmalı** — 1 ve 2 düzeltilmeden eğitim koşmanın anlamı yok.
+
+**1. Öğrenme sinyalini geri getir (§11.2 Sorun A)**
+- [ ] `env/strike_env.py` `reset()`: `self.dist_scale = max(float(self.dist[START]), 1.0)`
+- [ ] `_phi()` ve gözlem skaları #11: `max_man` yerine `dist_scale` ile normalize
+- [ ] Doğrulama: 40 radarlı bir haritada `Φ(B) ≈ 0`, `Φ(H) = 1`, ve yol boyunca
+      **monoton artıyor** (şu an B'den itibaren 0'da çakılı)
+
+**2. Ödül kalibrasyonu (§11.2 Sorun B)**
+- [ ] `config.py`: `R_TIMEOUT = -50`, `R_RISK_COEF = 7.5`
+- [ ] `baselines/policies.py` ile doğrula: scripted oracle'ın episode getirisi
+      oyalanan politikadan **yüksek** çıkmalı (şu an çıkmıyor)
+
+**3. Rastgele harita altyapısı**
+- [ ] `config.py`: `N_RADAR = 40`, `RADAR_RANDOM = True`, curriculum sabitleri,
+      `RISK_CACHE = None`, `ZONE_CACHE = None`
 - [ ] `env/sampler.py`: `sample_radars(n, rng)` — üniform merkez, çakışma serbest
-- [ ] `env/strike_env.py`:
-      - `reset()` her episode yeni radar seti çeker, zone + risk haritasını kurar
-      - per-radar tetiklenme dizileri (`_trig_outer`, `_trig_inner`)
-      - `_hazard()` → seviye tabanlı yerine radar tabanlı
-      - B/H'nin içinde olduğu radarlar başlangıçta tetiklenmiş sayılır
-- [ ] `baselines/risk_oracle.py`: kenar-maliyeti hesabı `scan_random_maps.py`'den
-      taşınır (zaten yazılı ve doğrulanmış)
+- [ ] `env/strike_env.py` `reset()`: her episode yeni radar seti → `build_zone_map`
+      → `build_risk_distance_map` (onbelleksiz), `map_seed` ile deterministik
+- [ ] `_prev_zone`'u `zone[START]` ile başlat (kalkış istisnası, §11.3) —
+      `risk_oracle.survival_prob` da aynı şekilde `prev = z[start]`
+
+**4. Ölçüm**
 - [ ] `eval/evaluate.py`: `surv_ratio` + sabit seed'li **ortak** test harita seti
       (her algoritma AYNI 100 haritada ölçülmeli, yoksa kıyas anlamsız)
 - [ ] `viz`: harita artık episode'a özgü — yol çizimi radar setini JSON'dan okumalı
-- [ ] `tests/test_env.py`: çakışan iki radara aynı anda girmek İKİ zar atıyor mu
+
+**5. Regresyon**
+- [ ] `tests/test_env.py`: `greedy_path` düzeltmesi sabit harita sayılarını
+      değiştirdi mi — `map_check.py` ve `policies.py` yeniden koşulup §0.3'teki
+      sayılar **güncellenmeli**
+- [ ] Yeni test: üst üste binen iki radarın alanında ölüm olasılığı **tek**
+      radardakiyle aynı olmalı (Burak'ın kuralı — toplama yok)
+- [ ] Yeni test: `Φ` satüre olmuyor (40 radarlı haritada `Φ(B) < Φ(orta) < Φ(H)`)
 
 ---
 

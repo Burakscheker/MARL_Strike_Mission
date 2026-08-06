@@ -94,7 +94,8 @@ def move_risk(z_from: np.ndarray, z_to: np.ndarray,
     return lut[z_from, z_to]
 
 
-def _direction_costs(z: np.ndarray, risk_w: float, mode: str) -> dict:
+def direction_costs(z: np.ndarray, risk_w: float = RISK_W,
+                    mode: str = HAZARD_MODE) -> dict:
     """4 yon icin "u'dan v'ye HAREKET" maliyeti: 1 adim + risk_w * p(u->v).
 
     Node-agirlikli (her hucreye sabit maliyet) surumden KENAR-agirlikliya
@@ -156,7 +157,7 @@ def build_risk_distance_map(goal=GOAL, zone: np.ndarray | None = None,
     agirliklarin bu skalarlari tanidik bir araliktan gormesi icin onemli.
     """
     z = zone_map() if zone is None else zone
-    cost = _direction_costs(z, risk_w, mode)
+    cost = direction_costs(z, risk_w, mode)
 
     dist = np.full(z.shape, np.inf, dtype=np.float64)
     dist[goal] = 0.0
@@ -226,26 +227,53 @@ def exposure(path, zone: np.ndarray | None = None) -> tuple[int, int]:
     return outer, inner
 
 
-def greedy_path(start=(0, 0), goal=GOAL, dmap: np.ndarray | None = None,
-                max_steps: int = 10_000) -> list[tuple[int, int]]:
-    """Risk-mesafe haritasinda tepe-inisi ile ORACLE yolunu cikar.
+_STEP_DIRS = (("up", -1, 0), ("right", 0, 1), ("down", 1, 0), ("left", 0, -1))
 
-    dist haritasi zaten en ucuz maliyeti tasidigi icin, her adimda en dusuk
-    dist'li komsuya gitmek optimal yolu verir (Dijkstra'nin geri-izlemesi).
+
+def greedy_path(start=(0, 0), goal=GOAL, dmap: np.ndarray | None = None,
+                cost: dict | None = None,
+                max_steps: int = 20_000) -> list[tuple[int, int]]:
+    """Risk-mesafe haritasindan ORACLE yolunu cikar (Dijkstra geri-izlemesi).
+
+    BUG (bulundu ve duzeltildi): eskiden her adimda SADECE `d` degeri en kucuk
+    komsuya gidiliyordu (tepe-inisi). Bu, maliyet DUGUM-agirlikli oldugunda
+    yaklasik dogru; ama bizim maliyetimiz KENAR-agirlikli — bir hucreye
+    girmenin bedeli hangi bolgeden geldigine bagli (`move_risk`). per_entry'de
+    bir halkaya girmek 1 + 1500*0.9 = 1351 adim-esdegeri; `d`'si biraz daha
+    kucuk diye o komsuya atlamak yolu felakete surukluyordu.
+
+    Dogru geri izleme, Bellman denkleminin kendisi:
+        d[u] = min_v ( cost(u->v) + d[v] )
+    yani argmin ALINIRKEN kenar maliyeti de toplanmali.
+
+    OLCULDU (40 rastgele radar, per_entry): eski surum hayatta kalma 0.0008,
+    duzeltilmis surum AYNI haritada 0.0800 — yani oracle tavani 100 KAT
+    dusuk raporlaniyordu. per_step'te de 0.0063 -> 0.5028. Tavan yanlis
+    olunca "ajan ne kadar iyi" sorusu da yanlis cevaplaniyordu.
+
+    cost=None verilirse varsayilan harita/moddan uretilir (sabit-harita
+    cagiranlar icin geriye donuk uyumlu). Rastgele haritada MUTLAKA o
+    haritanin direction_costs()'u gecilmeli.
     """
     d = risk_distance_map() if dmap is None else dmap
+    if cost is None:
+        cost = direction_costs(zone_map())
     n = d.shape[0]
     cur = tuple(start)
     path = [cur]
     for _ in range(max_steps):
         if cur == tuple(goal):
             return path
-        best, best_d = None, d[cur]
-        for dr, dc in ((-1, 0), (0, 1), (1, 0), (0, -1)):
+        best, best_v = None, np.inf
+        for name, dr, dc in _STEP_DIRS:
             rr, cc = cur[0] + dr, cur[1] + dc
-            if 0 <= rr < n and 0 <= cc < n and d[rr, cc] < best_d:
-                best, best_d = (rr, cc), d[rr, cc]
-        if best is None:
+            if 0 <= rr < n and 0 <= cc < n:
+                v = cost[name][cur] + d[rr, cc]
+                if v < best_v:
+                    best_v, best = v, (rr, cc)
+        # Maliyetler >= 1.0 oldugu icin d yol boyunca KESIN azalir; sonsuz
+        # dongu imkansiz. best None ise (hepsi inf) cikilir.
+        if best is None or not np.isfinite(best_v):
             break
         cur = best
         path.append(cur)
