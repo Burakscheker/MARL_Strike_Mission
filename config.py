@@ -161,8 +161,22 @@ R_ALL_DEAD = -50.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 # IKI KEZ cezalandiriliyordu: ajanin risk kacinmasi spec'in 2 kati, yani
 # tasarlanandan daha urkek bir politika ogreniyordu.
 # 7.5 = |R_DEATH| / 2 ile iki terimin TOPLAMI spec'teki tek cezaya esitlenir.
-# Ablation olarak 0.0 (sadece stokastik) ve 15.0 (eski) de kosulmali.
-R_RISK_COEF = 7.5
+#
+# 7.5 -> 15.0 GERI ALINDI (2026-08-06, olcume dayali — §11.11).
+# "Iki kez sayiliyor" argumani, IKI TERIMIN DE ogreniciye ulastigini
+# varsayiyordu. Olculdu: ULASMIYOR.
+#   - Stokastik R_DEATH terminal/seyrek gecislerde: tamponun ~%0.2'si, ve o
+#     satirlarda TD hatasi buyuk oldugu icin Huber gradyani +-1'e kirpiyor.
+#     R_ALL_DEAD'i 200 KATINA cikarmak trajektoriyi degistirmedi — yani bu
+#     kanal pratikte SESSIZ.
+#   - Yogun R_RISK_COEF terimi ise HER tehlikeli adimda odeniyor ve TD
+#     hatalari kucuk (medyan 0.02, p99 0.70) => karesel bolgede, buyuklugu
+#     gradyana TAM giriyor.
+# Yani risk bilgisini tasiyan tek gercek kanal YOGUN olan. Onu yariya
+# indirmek, ajanin gordugu riski yariya indirmekti.
+# 15.0 = |R_DEATH| ile yogun kanal beklenen olum maliyetinin TAMAMINI tasir.
+# Ablation olarak 0.0 (sadece stokastik) ve 7.5 de kosulmali.
+R_RISK_COEF = 15.0
 
 # ---------------------------------------------------------------- egitim (ortak)
 SEED = 0
@@ -182,6 +196,40 @@ GAMMA = 0.9998
 GRAD_CLIP = 10.0
 HIDDEN = 128
 LEARN_EVERY = 8
+
+# --- ODUL GORUNURLUGU (Strike_Mission.md §11.11) --------------------------
+# OLCULDU: R_ALL_DEAD'i -25'ten -5000'e cikarmak (200 kat!) egitim
+# trajektorisini HIC degistirmedi. Yani odul BUYUKLUGU gradyana girmiyordu.
+# Iki etki ust uste biniyor:
+#   1) smooth_l1_loss |TD hatasi| > beta'da gradyani +-1'e sabitler —
+#      buyuklugu degil sadece ISARETI tasir. Terminal odullerimiz -50..-5000,
+#      yani daima doygun bolgede.
+#   2) LR 3e-5 x gradyan tavani 1 -> Q tek guncellemede en fazla 3e-5 hareket
+#      eder. Q hedefe (~+-100) hic yaklasamiyor, iki hedef arasindaki fark
+#      materyalize olmuyor.
+#
+# REWARD_SCALE: ogrenicinin gordugu TUM odulleri carpar (ortam ciktisinda,
+# tek yerde). Amac Q hedeflerini O(1-5) araligina indirmek — hem Huber'in
+# karesel bolgesine sokar hem de LR'in Q'yu makul surede oraya tasimasini
+# saglar. config'deki odul degerleri INSAN OLCEGINDE kalir (kapi aritmetigi
+# §11.8'de oldugu gibi okunabilir olsun diye).
+#
+# HUBER_BETA: karesel bolgenin genisligi. beta buyudukce buyukluk daha genis
+# bir aralikta tasinir (gradyan = hata/beta), ama gradyan TAVANI yine 1 —
+# yani beta tek basina LR sorununu COZMEZ. Ikisi ayri ayri ve birlikte
+# olculdu; secim tests/test_reward_visible.py'nin sonucuna gore yapildi.
+# SECIM (olcume dayali, 2026-08-06): IKISI DE NO-OP birakildi.
+# Gerekce: TD hatasi dagilimi olculdu -> medyan 0.02, p90 0.05, p99 0.70,
+# yani gecislerin %99'u ZATEN Huber'in karesel bolgesinde. Doygunluk sadece
+# kuyrukta (terminal gecisler, max 21.7). Iki knob da bu kuyruğu duzeltirken
+# YOGUN sinyali zayiflatiyor:
+#   REWARD_SCALE=0.05 -> shaping gradyani 20 kat kuculur
+#   HUBER_BETA=50     -> gradyan = hata/beta, tipik hatada 50 kat kuculur
+# Yani "nadir terminal odulu gorunur kilmak" icin "her adimda ogrenilen
+# sinyali" feda etmek olurdu. Dogru cozum bu degil (bkz. R_RISK_COEF notu):
+# riski SEYREK/stokastik kanaldan degil YOGUN kanaldan tasimak.
+REWARD_SCALE = 1.0             # 1.0 = kapali
+HUBER_BETA = 1.0               # torch varsayilani
 
 # SHAPING_COEF: hedefe dogru bir adimin shaping sinyali |R_STEP|'in ~5 katı
 # olsun (MARL-Pathfinding'de olculmus dogru oran: en zayif sinyal "hedefe git"

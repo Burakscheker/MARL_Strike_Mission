@@ -1105,16 +1105,29 @@ başlığı `-80.0` yazıyor, yani yeni değer gerçekten kullanıldı.
 
 Ödülü 200 katına çıkarmak bile tek bir aksiyonu değiştirmiyor.
 
-**Neden.** İki şey üst üste biniyor:
+**Neden — ölçülen TD hatası dağılımı** (2048'lik tampon örneği):
 
-1. **Huber (`smooth_l1_loss`) doygunluğu.** `|TD hatası| > 1` olduğunda
-   gradyan sabit ±1 — büyüklük taşınmıyor, sadece **işaret**. Bizim terminal
-   ödüllerimiz −50…−5000 aralığında, yani her zaman doygun bölgede.
-2. **Çok düşük LR.** `VDN_LR = 3e-5`, gradyan tavanı 1 → tek güncellemede Q
-   en fazla `3e-5` hareket eder. 600 episode'da ~33k güncelleme, üstelik
-   terminal geçişler tampondaki satırların yalnızca **%0.2**'si. Q, hedefe
-   asla yaklaşamıyor; iki farklı hedef arasındaki fark hiç materyalize
-   olmuyor.
+| `REWARD_SCALE` | medyan | p90 | p99 | max |
+|---:|---:|---:|---:|---:|
+| 1.0 | 0.02 | 0.05 | 0.70 | **21.72** |
+| 0.05 | 0.03 | 0.07 | 0.41 | **2.51** |
+
+> ⚠️ İlk açıklamam **"Huber her şeyi kırpıyor"** idi; ölçüm bunu düzeltti.
+> Geçişlerin **%99'u zaten karesel bölgede** (|hata| < 1) — yoğun sinyal
+> (shaping, risk maliyeti) sorunsuz öğreniliyor. Doygunluk sadece **kuyrukta**,
+> yani terminal geçişlerde var (max 21.7).
+
+Gerçek mekanizma bu yüzden **"nadir + yavaş"**:
+
+1. **Terminal geçişler tamponun ~%0.2'si.** Bir episode ~450–2800 adım, ama
+   `R_ALL_DEAD` yalnızca son adımda ödeniyor. Öğrenici o satırı çok seyrek
+   görüyor.
+2. **O seyrek satırlarda hata büyük ve Huber onu kırpıyor** → gradyan ±1'de
+   sabit, `LR = 3e-5` ile Q tek güncellemede 3e-5 hareket ediyor.
+
+İkisi çarpılınca: 600 episode boyunca terminal ödülün Q üzerindeki toplam
+etkisi, argmax'i çevirecek eşiğin altında kalıyor. Ödülü 200 katına
+çıkarmak bile bunu değiştirmiyor çünkü kırpma büyüklüğü zaten siliyor.
 
 **Sonuç — bütün ödül kalibrasyonu çalışması bu ölçekte etkisiz.** Kapılar
 (§11.8), `R_TIMEOUT`, `R_ALL_DEAD`, `R_FIRST_GOAL`... hepsi doygun bölgede
@@ -1126,14 +1139,84 @@ Bu, gözlenen davranışı da tam açıklıyor: ajan shaping'in dediğini yapıy
 ("hedefe doğru git"), harita %52 iç halka olduğu için ilerledikçe ölüyor.
 **Ödül hackleme yok — ödül fonksiyonunun yarısı hiç okunmuyor.**
 
-**Yapılacak (sıradaki iş, ölçülecek):**
-- [ ] Ödülleri ölçekle: hepsini ~20'ye böl (terminal ~±2.5, yoğun ~±0.0024)
-      **veya** `smooth_l1_loss(..., beta=…)` ile Huber eşiğini ödül ölçeğine
-      taşı. İkisi de tek satır; **hangisinin işe yaradığı ölçülecek.**
-- [ ] Doğrulama testi: `R_ALL_DEAD`'i 2 katına çıkarınca trajektori
-      **değişmeli**. Şu an değişmiyor ve bu bir regresyon testi olmalı.
-- [ ] Ondan sonra §11.8 kapıları anlamlı hale gelir; şu an sadece kâğıt
-      üzerinde doğrular.
+#### 11.11b Çözüm ölçüldü: iki knob da GEREKLİ, hiçbiri tek başına YETMİYOR
+
+İki aday vardı — ödülleri ölçeklemek (`REWARD_SCALE`) ve Huber eşiğini
+büyütmek (`HUBER_BETA`). "Hangisi?" diye tahmin etmek yerine dördünü de
+aynı tohumla koştum (`python -m tests.test_reward_visible`):
+
+| `REWARD_SCALE` | `HUBER_BETA` | tipik \|TD hatası\| | ödül görünür mü |
+|---:|---:|---:|:---:|
+| 1.0 | 1.0 | ~170 | hayır |
+| 1.0 | 50 | ~170 | hayır |
+| 0.05 | 1.0 | ~8.5 | hayır |
+| **0.05** | **50** | **~8.5** | **EVET** ✅ |
+
+**Beklemediğim sonuç: ikisi de tek başına yetersiz.** Koşul basitçe
+`|TD hatası| < beta`. Ölçekleme hatayı 170'ten 8.5'e indiriyor ama `beta=1`
+hâlâ altında; `beta=50` eşiği yükseltiyor ama ölçeklenmemiş hata 170 hâlâ
+üstünde. **İkisi birlikte** hatayı karesel bölgeye sokuyor ve gradyan
+büyüklüğü (`hata/beta`) taşımaya başlıyor.
+
+> Bu, "önce hangisini deneyeyim" diye tahmin yürütseydim **kaçıracağım** bir
+> sonuç: hangisini tek başına denesem "işe yaramadı" deyip yanlış sonuca
+> varırdım.
+
+#### 11.11c Ama test kendisi kötüymüş — ve doğru çözüm başka yerde
+
+`beta`'yı ince ayarlamak için aynı episode sayısıyla (25) tekrar ölçtüm:
+
+| `REWARD_SCALE` | `HUBER_BETA` | görünür |
+|---:|---:|:---:|
+| 0.05 | 5 | hayır |
+| 0.05 | 10 | hayır |
+| 0.05 | 50 | EVET |
+
+**Bu, ölçülen TD hatalarıyla çelişiyor.** Ölçek 0.05'te en büyük hata 2.51;
+`beta=5`'te zaten hiçbir şey kırpılmıyor, yani büyüklük tamamen gradyana
+giriyor olmalı — ama "görünmüyor". `beta=50`'de görünüyor.
+
+Tek tutarlı açıklama: **testin kendisi kötü.** *"Trajektori değişti mi"*
+kaotik bir ikili sinyal; ödülün öğrenilip öğrenilmediğini değil, iki koşunun
+ne zaman ayrıştığını ölçüyor. `beta=50` gradyanı 50 kat küçülttüğü için
+politika başlangıca yakın kalıyor ve ufak farklar sapma olarak görünüyor —
+sebep ödülün görünür olması değil, öğrenmenin yavaşlaması.
+
+> Üçüncü kez aynı ders: **proxy metrik seçerken de ölçüm gerekiyor.**
+> "Trajektori farkı" makul görünen ama neyi ölçtüğü doğrulanmamış bir
+> vekildi ve beni yanlış yöne götürdü.
+
+**Karar (ölçüme dayalı): iki knob da NO-OP bırakıldı.**
+`REWARD_SCALE = 1.0`, `HUBER_BETA = 1.0`. İkisi de config'de duruyor,
+belgeli ve testli — ama açılmıyorlar, çünkü ikisi de nadir terminal ödülü
+kurtarmak için **yoğun sinyali** feda ediyor:
+
+| knob | kuyruğa faydası | yoğun sinyale zararı |
+|---|---|---|
+| `REWARD_SCALE=0.05` | max hata 21.7 → 2.5 | shaping gradyanı **20× küçülür** |
+| `HUBER_BETA=50` | kırpma kalkar | tipik hatada gradyan **50× küçülür** |
+
+**Asıl çözüm: riski seyrek kanaldan değil YOĞUN kanaldan taşımak.**
+
+Ölçüm şunu söylüyor: stokastik `R_DEATH` kanalı pratikte **sessiz**
+(tamponun %0.2'si + kırpma). Yoğun `R_RISK_COEF × p` kanalı ise **her
+tehlikeli adımda** ödeniyor ve TD hataları karesel bölgede — büyüklüğü
+gradyana tam giriyor.
+
+Bu, §11.2'deki "risk iki kez sayılıyor" düzeltmemi **geçersiz kılıyor**:
+o argüman iki terimin de öğreniciye ulaştığını varsayıyordu. Ulaşmıyor.
+Yoğun terimi yarıya indirmek, **ajanın gördüğü riski yarıya indirmekti.**
+
+- [x] `R_RISK_COEF = 7.5 → 15.0` geri alındı (`= |R_DEATH|`, yoğun kanal
+      beklenen ölüm maliyetinin tamamını taşır)
+- [x] `REWARD_SCALE` / `HUBER_BETA` knob'ları eklendi, ölçüldü, no-op bırakıldı
+- [x] `tests/test_reward_visible.py` — matris taraması + `--check` modu
+- [ ] Yeniden eğitim koşuluyor (`--tag vdn_risk15`); `mission_prob` ve
+      `surv_ratio` ile ölçülecek
+- [ ] §11.8 kapıları bu ölçekte hâlâ sadece kâğıt üzerinde doğru —
+      terminal ödüller öğreniciye ulaşmadığı sürece öyle kalacaklar.
+      Bunu değiştirmenin yolu prioritized replay veya çok daha uzun eğitim;
+      **şu an kapsam dışı, ama bilinen bir sınır.**
 
 > **Ders:** "ödül fonksiyonunu doğru yazdım" yetmiyor — öğrenicinin o
 > ödülü **görebildiğini** de kanıtlamak gerekiyor. Kontrollü deney (aynı

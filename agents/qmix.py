@@ -26,7 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from agents.networks import build_qnet, masked_q
-from config import (AGENT_1, AGENT_2, CNN_CHANNELS, EPS_END, EPS_START,
+from config import (HUBER_BETA, AGENT_1, AGENT_2, CNN_CHANNELS, EPS_END, EPS_START,
                     GAMMA, GRAD_CLIP, LEARN_EVERY, N_ACTIONS, OBS_DIM,
                     PATCH_SIZE, QMIX_BATCH, QMIX_BUFFER, QMIX_EPS_DECAY_STEPS,
                     QMIX_LEARN_START, QMIX_LR, QMIX_MIXER_EMBED,
@@ -254,7 +254,7 @@ class QMixAgent:
             nq_tot = self.mixer_target(torch.stack([nq1, nq2], dim=1), next_state)
             target_val = r + GAMMA * nq_tot * (1.0 - done)
 
-        loss = nn.functional.smooth_l1_loss(q_tot, target_val)
+        loss = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA)
         self.opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(

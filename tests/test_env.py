@@ -114,10 +114,9 @@ def _run_scripted(env, path, seed):
     # oldu, test "hic olum yok" diyordu cunku ucak radara hic girmiyordu.
     env.pos[C.AGENT_1] = tuple(path[0])
     env.path[C.AGENT_1] = [tuple(path[0])]
-    # _prev_zone da tasinmali. reset() onu ucagin O ANKI hucresinden kuruyor
-    # (kalkis istisnasi); yukaridaki isinlanmadan sonra guncellenmezse ortam
-    # "START'tan geldim" saniyor ve survival_prob ile AYRISIYOR — yolun ilk
-    # hucresi bir halkanin icindeyse ortam zar atiyor, analitik atmiyordu.
+    # Isinlanma sonrasi _prev_zone da tasinmali: ucak yolun ilk hucresine
+    # ZATEN oradan gelmis sayilmali, yoksa ortam "0'dan geldim" deyip fazladan
+    # bir giris zari atar. survival_prob tarafinda karsiligi prev0 parametresi.
     env._prev_zone[C.AGENT_1] = int(env.zone[tuple(path[0])])
     for (r0, c0), (r1, c1) in zip(path, path[1:]):
         dr, dc = r1 - r0, c1 - c0
@@ -136,12 +135,13 @@ def test_simulation_matches_analytic(trials=400):
     """
     r0, c0 = C.RADARS[0]
     # Ic halkanin ustunden altina duz dikey gecis. Yol ic halkanin BIR HUCRE
-    # DISINDAN baslamali (orasi dis halka, zone=1): kalkis istisnasi geregi
-    # yolun ILK hucresi "giris" sayilmiyor, tam sinirdan baslasaydik ic halkaya
-    # girmis olmaz ve analitik hayatta kalma 1.0 cikardi (testin olcmek
-    # istedigi sey tam olarak bu girisin maliyeti).
+    # DISINDAN (dis halka, zone=1) baslar ki olculen sey SADECE 1->2 girisinin
+    # maliyeti olsun; asagidaki prev0=1 de ortama ayni seyi soyler.
     path = [(r, c0) for r in range(r0 - C.INNER_HALF - 1, r0 + C.INNER_HALF + 1)]
-    analytic = survival_prob(path)
+    # prev0: bu yol B'den DEGIL, dis halkanin icinden basliyor (isinlanma).
+    # Ucagin oraya zaten dis halkadan geldigini soylemezsek survival_prob
+    # path[0]'i da bir 0->1 girisi sayar ve 0.8 fazladan carpan ekler.
+    analytic = survival_prob(path, prev0=1)
 
     env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False,
                            radar_random=False)
@@ -338,28 +338,48 @@ def test_random_maps():
           and curriculum_n_radar(10_000, 10_000) == 40)
 
 
-def test_takeoff_exception():
-    """B bir halkanin ICINDEYSE kalkista zar atilmamali.
+def test_start_in_zone_rolls():
+    """B bir halkanin ICINDEYSE zar ATILMALI — Burak: "atmamazlik yapma".
 
-    40 rastgele radarla bu nadir bir kose durumu DEGIL: olculdu, 30 test
-    haritasinin 12'sinde (%40) B bir halkanin icinde kaliyor. _prev_zone 0'dan
-    baslasaydi bu haritalarin hepsinde ucak daha ilk adimda zar yerdi ve
-    maliyet modeli (sadece hucreler ARASI gecisleri ucretlendiriyor) bunu hic
-    gormedigi icin ortam ile oracle sessizce ayrisirdi.
+    Kisa omurlu bir "kalkis istisnasi" (_prev_zone = zone[B]) denenmisti;
+    kaldirildi. 40 rastgele radarla bu kural sik devreye giriyor: olculdu,
+    test haritalarinin ~%40'inda B bir halkanin icinde.
     """
     env = StrikeMissionEnv(seed=0, radar_random=True, n_radar=40)
     n_inside = 0
     for k in range(30):
         env.reset(map_seed=C.EVAL_SEED_BASE + k)
-        z0 = int(env.zone[C.START])
-        if z0 > 0:
+        if int(env.zone[C.START]) > 0:
             n_inside += 1
-        if env._prev_zone[C.AGENT_1] != z0:
-            check("kalkis istisnasi: _prev_zone = zone[B]", False,
-                  f"map {k}: {env._prev_zone[C.AGENT_1]} != {z0}")
+        if env._prev_zone[C.AGENT_1] != 0:
+            check("kalkis istisnasi YOK: _prev_zone 0'dan basliyor", False,
+                  f"map {k}: {env._prev_zone[C.AGENT_1]} != 0")
             return
-    check("kalkis istisnasi: _prev_zone = zone[B] (30 harita)", True,
+    check("kalkis istisnasi YOK: _prev_zone 0'dan basliyor (30 harita)", True,
           f"{n_inside}/30 haritada B halka icinde")
+
+    # B'nin IC halkada oldugu bir harita bul ve olum oranini olc: ~%90 olmali.
+    env2 = StrikeMissionEnv(max_steps=50, seed=0, radar_random=True, n_radar=40)
+    target = None
+    for k in range(200):
+        env2.reset(map_seed=C.EVAL_SEED_BASE + k)
+        if int(env2.zone[C.START]) == 2:
+            target = C.EVAL_SEED_BASE + k
+            break
+    if target is None:
+        check("B ic halkada olan harita bulundu", False, "200 haritada yok")
+        return
+    deaths = 0
+    trials = 200
+    for t in range(trials):
+        env2.reset(map_seed=target, seed=5000 + t)
+        env2.alive[C.AGENT_2] = False
+        env2.step({C.AGENT_1: C.RIGHT, C.AGENT_2: C.NOOP})
+        deaths += int(not env2.alive[C.AGENT_1])
+    rate = deaths / trials
+    check("B ic halkadayken ILK adimda ~%90 olum",
+          abs(rate - C.P_INNER_TOTAL) < 0.07,
+          f"olculen={rate:.3f} hedef={C.P_INNER_TOTAL}")
 
 
 def test_reward_hacking_gates():
@@ -424,7 +444,7 @@ def main():
     test_reentry_rolls_again()
     print("\n=== rastgele harita / odul hackleme ===")
     test_random_maps()
-    test_takeoff_exception()
+    test_start_in_zone_rolls()
     test_reward_hacking_gates()
 
     print("\n" + "=" * 60)

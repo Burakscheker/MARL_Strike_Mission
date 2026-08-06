@@ -27,9 +27,9 @@ from config import (AGENT_1, AGENT_2, ALERT_DECAY, ALERT_ENABLED, ALERT_MULT,
                     MAP_MAX_ITER, MAX_STEPS, NOOP, N_ACTIONS, N_RADAR,
                     OUTER_HALF, P_DEATH, PATCH_RADIUS, PATCH_SIZE,
                     PATCH_STRIDE, P_INNER_TOTAL, P_OUTER_TOTAL, RADARS,
-                    RADAR_RANDOM, R_ALL_DEAD, R_DEATH, R_FIRST_GOAL,
-                    R_RISK_COEF, R_SECOND_GOAL, R_STEP, R_TIMEOUT,
-                    SHAPING_COEF, START, STATE_DIM)
+                    RADAR_RANDOM, REWARD_SCALE, R_ALL_DEAD, R_DEATH,
+                    R_FIRST_GOAL, R_RISK_COEF, R_SECOND_GOAL, R_STEP,
+                    R_TIMEOUT, SHAPING_COEF, START, STATE_DIM)
 from env.sampler import sample_radars
 
 Cell = tuple[int, int]
@@ -167,16 +167,21 @@ class StrikeMissionEnv:
             self._vis[a][p[0] // PATCH_STRIDE, p[1] // PATCH_STRIDE] = 1.0
 
         # per_entry modu icin: ucagin O AN icinde bulundugu bolge.
-        # KALKIS ISTISNASI: 0'dan DEGIL, baslangic hucresinin GERCEK
-        # bolgesinden baslar. 40 rastgele radarla B'nin bir halkanin icinde
-        # kalma olasiligi yuksek; 0'dan baslamak "kendi ussunden kalkan ucak
-        # daha ilk adimda tespit edildi" demek olurdu. Ustelik maliyet modeli
-        # (direction_costs) sadece hucreler ARASI gecisleri ucretlendirdigi
-        # icin bunu hic gormuyor -> olculdu: dist(B)=1998 (tamamen guvenli
-        # yol var) olan bir haritada survival_prob 0.100 cikiyordu. Bu satir
-        # ve risk_oracle.survival_prob'daki esi o tutarsizligi kapatiyor.
-        self._prev_zone = {a: int(self.zone[self.pos[a]])
-                           for a in (AGENT_1, AGENT_2)}
+        #
+        # KURAL (Burak, 2026-08-06): "B bir radarin icindeyse zar at,
+        # atmamazlik yapma." Yani KALKIS ISTISNASI YOK — 0'dan baslanir ve
+        # B bir halkanin icindeyse ilk adimda zar atilir. (40 rastgele radarla
+        # bu nadir degil: olculdu, haritalarin ~%40'inda B bir halkanin
+        # icinde.) Kisa omurlu bir "kalkis istisnasi" denenmisti; Burak
+        # kaldirdi.
+        #
+        # NOT — maliyet modeliyle (direction_costs) kucuk bir tutarsizlik
+        # kaliyor: o sadece hucreler ARASI gecisleri ucretlendirir, yani
+        # B'nin kendi bolgesini gormez. Bu SORUN DEGIL, cunku o zar HER
+        # politika icin ayni sabit carpandir (herkes ayni B'den kalkiyor) ->
+        # optimal YOL degismez ve surv_ratio'da (ajan/oracle) tamamen
+        # sadelesir. Sadece mutlak hayatta kalma sayilari o carpani icerir.
+        self._prev_zone = {AGENT_1: 0, AGENT_2: 0}
 
         self.t = 0
         self.done = False
@@ -441,6 +446,15 @@ class StrikeMissionEnv:
 
         if self.done:
             info.update(self._terminal_info())
+        # ODUL OLCEKLEME — TEK YER. config'deki degerler insan olceginde
+        # kalir (kapi aritmetigi §11.8'de okunabilir olsun diye), ogrenici
+        # ise O(1) buyuklukte odul gorur. Gerekce §11.11: olceklenmemis
+        # hallerinde terminal oduller Huber'in doygun bolgesinde kaliyor ve
+        # BUYUKLUKLERI gradyana hic girmiyordu (R_ALL_DEAD -25 -> -5000
+        # trajektoriyi degistirmiyordu).
+        r_team *= REWARD_SCALE
+        for a in r_ind:
+            r_ind[a] *= REWARD_SCALE
         info["r_ind"] = r_ind
         info["t"] = self.t
         return self.observations(), float(r_team), self.done, info

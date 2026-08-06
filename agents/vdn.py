@@ -28,7 +28,7 @@ import torch
 import torch.nn as nn
 
 from agents.networks import build_qnet, masked_q
-from config import (AGENT_1, AGENT_2, EPS_END, EPS_START, GAMMA, GRAD_CLIP,
+from config import (HUBER_BETA, AGENT_1, AGENT_2, EPS_END, EPS_START, GAMMA, GRAD_CLIP,
                     LEARN_EVERY, N_ACTIONS, OBS_DIM, VDN_BATCH, VDN_BUFFER,
                     VDN_EPS_DECAY_STEPS, VDN_LEARN_START, VDN_LR,
                     VDN_TARGET_UPDATE)
@@ -188,7 +188,7 @@ class VDNAgent:
             nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
             target_val = r + GAMMA * (nq1 + nq2) * (1.0 - done)
 
-        loss = nn.functional.smooth_l1_loss(q_tot, target_val)
+        loss = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA)
         self.opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(

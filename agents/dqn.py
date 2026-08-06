@@ -11,7 +11,7 @@ import torch.nn as nn
 
 from agents.buffer import ReplayBuffer
 from agents.networks import build_qnet, masked_q
-from config import (DQN_BATCH, DQN_BUFFER, DQN_EPS_DECAY_STEPS, DQN_LR,
+from config import (HUBER_BETA, DQN_BATCH, DQN_BUFFER, DQN_EPS_DECAY_STEPS, DQN_LR,
                     DQN_LEARN_START, DQN_TARGET_UPDATE, EPS_END, EPS_START,
                     GAMMA, GRAD_CLIP, LEARN_EVERY, N_ACTIONS, OBS_DIM)
 
@@ -112,7 +112,7 @@ class DQNAgent:
             next_q = self.target(next_obs).gather(1, best).squeeze(1)
             target = reward + GAMMA * next_q * (1.0 - done)
 
-        loss = nn.functional.smooth_l1_loss(q, target)
+        loss = nn.functional.smooth_l1_loss(q, target, beta=HUBER_BETA)
         self.opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(self.online.parameters(), GRAD_CLIP)

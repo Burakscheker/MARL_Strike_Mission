@@ -196,7 +196,7 @@ def risk_distance_map(cache: str | None = RISK_CACHE, verbose: bool = False,
 # ----------------------------------------------------------------- analitik
 
 def survival_prob(path, zone: np.ndarray | None = None,
-                  mode: str = HAZARD_MODE) -> float:
+                  mode: str = HAZARD_MODE, prev0: int = 0) -> float:
     """Verilen yolun ANALITIK hayatta kalma olasiligi.
 
     per_entry: SADECE bolge seviyesinin ARTTIGI gecislerde zar atilir
@@ -213,13 +213,13 @@ def survival_prob(path, zone: np.ndarray | None = None,
         for r, c in path[1:]:
             s *= (1.0 - p[z[r, c]])
         return s
-    # KALKIS ISTISNASI: baslangic hucresinin bolgesinden basla, 0'dan DEGIL.
-    # Ucak kendi ussunden kalkiyor; B bir halkanin icindeyse bu bir "giris"
-    # sayilmaz. Ayrica maliyet modeli (direction_costs) sadece hucreler ARASI
-    # gecisleri ucretlendirdigi icin 0'dan baslamak iki modeli tutarsiz
-    # kiliyordu — olculdu: dist(B)=1998 (tamamen guvenli yol) olan bir
-    # haritada survival_prob 0.100 donuyordu. env.reset()'te de ayni kural.
-    prev = int(z[path[0]]) if len(path) else 0
+    # prev0=0 (varsayilan): B bir halkanin icindeyse bu bir GIRIS sayilir ve
+    # zar atilir — Burak'in kurali, "atmamazlik yapma". env.reset() de
+    # _prev_zone'u 0'dan baslatir, ikisi ayni.
+    # prev0 parametresi SADECE yol parcasi olcerken lazim: bir yolun ortasindan
+    # baslayan bir dilimi degerlendirirken ucagin oraya hangi bolgeden geldigi
+    # verilmelidir (bkz. tests/_run_scripted).
+    prev = prev0
     for r, c in path:
         cur = int(z[r, c])
         if cur > prev:
