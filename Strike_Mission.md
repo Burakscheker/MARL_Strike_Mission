@@ -970,6 +970,46 @@ politika da "hack"tir):
    hayatta kalma olasılığı / oracle'ınki. Zar sonucundan bağımsız, yolun
    deterministik bir fonksiyonu — şansla iyi görünmek mümkün değil.
 
+### 11.9 Ölçülen referanslar (held-out harita seti) 📊
+
+`python -m eval.evaluate --maps 40 --tag baselines` — 40 held-out harita
+(tohum `9e8+`, eğitimde **hiç görülmedi**), 40 radar:
+
+| politika | hayatta kalma (ort) | medyan |
+|---|---:|---:|
+| **Dijkstra oracle (TAVAN)** | **0.4934** | **0.7200** |
+| merdiven (naif çapraz) | 0.0017 | 0.0000 |
+| rastgele monoton | 0.0009 | 0.0000 |
+
+Harita istatistikleri: güvenli hücre %18.1, iç halka %51.9;
+**B 17/40 haritada, H 15/40 haritada bir halkanın içinde**; oracle yolu
+40/40 haritada `MAX_STEPS`'e sığıyor.
+
+> ⚠️ **§11.1'deki tarama sayıları bunlarla ÇELİŞİYOR ve eskidi.** Orada 40
+> radar için ortalama %32 / medyan %7.2 yazıyor. Fark neredeyse tamamen
+> **kalkış istisnasından** geliyor: tarama, `survival_prob`'un `prev = 0`'dan
+> başladığı dönemde koşuldu ve B bir iç halkanın içinde olduğunda (haritaların
+> ~%40'ı) daha ilk hücrede %90'lık zar sayıyordu. `0.8 × 0.1 = 0.08` →
+> düzeltince `0.8`: medyanın 0.072'den 0.72'ye çıkması tam olarak bu 10 kat.
+> **§11.9 sayıları geçerli olanlar** — ortamın kendi makinesiyle, gerçek
+> değerlendirme setinde ölçüldü.
+
+**Öğrenme problemi olarak çok sağlıklı:** tavan (0.49) ile naif taban (0.0017)
+arasında **~290 kat** açıklık var. Yani "hedefe doğru yürü" politikası
+neredeyse kesin ölüm, ama iyi bir yol gerçekten var. Ajanın öğrenecek somut
+bir şeyi var ve `surv_ratio` bunu gürültüsüz ölçüyor.
+
+**Görseller** (`python -m viz.plot_random`):
+
+| dosya | ne gösteriyor |
+|---|---|
+| `runs/viz/random_maps.png` | 4 held-out harita, oracle yolu vs naif merdiven. Radarların **tek bir birleşik kütleye** dönüştüğü (§11.3) burada net görünüyor |
+| `runs/viz/baseline_survival.png` | Harita başına tavan/taban dağılımı. Oracle eğrisi **basamaklı**: 1.0 / 0.8 / 0.64 / 0.1 / 0.08 / 0.008 — `per_entry`'nin ayrık yapısının doğrudan kanıtı |
+
+> `viz/plot_map.py` artık **ölü kod**: iptal edilen 51x51 tasarımından kalma,
+> `STEP=20` ve sabit 3 radar gömülü. Yerine `viz/plot_random.py` geçti
+> (harita başına radar setini episode kaydından okuyor).
+
 ---
 
 ## 12. Tek paragraf özet
