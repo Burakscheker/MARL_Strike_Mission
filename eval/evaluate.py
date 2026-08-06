@@ -220,8 +220,17 @@ def main():
             raise SystemExit("--ckpt ile --algo da gerekli")
         from train import build_agent
         agent = build_agent(args.algo, 0, "cpu")
-        (agent[C.AGENT_1].load(args.ckpt) if args.algo == "iql"
-         else agent.load(args.ckpt))
+        if args.algo == "iql":
+            # IQL'in IKI AYRI agi var ve ayri dosyalara kaydediliyor.
+            # BUG (bulundu ve duzeltildi): eskiden sadece agent1 yukleniyordu,
+            # agent2 RASTGELE agirliklarla kaliyordu — yani IQL her zaman bir
+            # egitilmemis ucakla olculuyordu. Uc algoritmayi karsilastiran bir
+            # deneyde bu, IQL'i sistematik olarak haksiz yere batiriyordu.
+            stem = args.ckpt.replace("_agent1.pt", "").replace(".pt", "")
+            agent[C.AGENT_1].load(f"{stem}_agent1.pt")
+            agent[C.AGENT_2].load(f"{stem}_agent2.pt")
+        else:
+            agent.load(args.ckpt)
         print(f"model yuklendi: {args.ckpt}")
     else:
         print("model YOK — sadece referans politikalar olculuyor")
