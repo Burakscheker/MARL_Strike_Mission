@@ -6,7 +6,59 @@
 > hedefe varırsa takım ödülü fullenir.**
 > IQL / VDN / QMIX ile eğitip karşılaştıracağız.
 
-Durum: 📋 Planlama · Branch: `iql_vdn_qmix` · Güncelleme: 2026-08-05
+Durum: 🔬 Deney · Branch: `iql_vdn_qmix` · Güncelleme: 2026-08-06
+
+---
+
+## 0. Bu proje NİÇİN var — asıl amaç 🔑
+
+> **Bu bir ürün değil, bir ALGORİTMA SEÇME DENEYİ.**
+
+Gerçek iş `rs1/` klasöründe: **Rocksoft staj görevi — Elektronik Harp (EW)
+simülasyonunda single-agent RL'i multi-agent'a çevirmek.** Orada
+`SinglePlatformTacticalEnv` (83-dim state, tek uçak, 8 SAM tehdidi) üzerinde
+çalışan bir DQN var ve bir sonraki aşama iki uçağa geçmek. İki aday var —
+**PPO tabanlı** ve **VDN'li DQN** — hangisinin kullanılacağı test edilip
+patronlara raporlanacak. Hedef senaryo kooperatif ve **rolleri farklı**:
+biri önden gidip keşif yapar ve yol açar (recon/leader), diğeri arkadan
+gelip vurur (striker/follower).
+
+**Strike Mission o kararın test tezgâhı.** Burada radarlar SAM tehditlerinin,
+1000x1000 grid EW sahnesinin sadeleştirilmiş halidir. Soru şu:
+
+> İki ajanı koordine etmek için **IQL mi, VDN mi, QMIX mi?**
+
+### 0.0 Bunun ölçüm stratejisine ZORUNLU sonucu
+
+Amaç mutlak başarıyı büyütmek DEĞİL, **üç algoritmayı birbirinden
+ayırt edebilmek.** Bu ayrım pratikte her şeyi değiştiriyor:
+
+- **%0'da hepsi aynı görünür.** Üç algoritma da 0/50 başarı verirse deneyin
+  **istatistiksel gücü sıfırdır** — hangisinin daha iyi olduğu hakkında
+  hiçbir şey söyleyemeyiz. Tabandan kurtulmak, karşılaştırmanın **ön
+  koşuludur**, konudan sapma değil.
+- **Bu yüzden ortak bir başlangıç noktası meşrudur.** BC ön-eğitimi (§11.12)
+  üç algoritmaya da AYNI checkpoint'ten verilirse karşılaştırma adil kalır
+  ve hepsi ölçülebilir bir bölgeye taşınır. BC bir sonuç değil, **deneyi
+  mümkün kılan yöntemsel araçtır.**
+- **Ana metrik `surv_ratio`** (§11.6), ham başarı değil: gürültüsüz olduğu
+  için üç algoritma arasındaki farkı çok daha az episode'la yakalar.
+- **Ortak sabit harita seti** şart (§11.6) — algoritmalar farklı haritalarda
+  ölçülürse fark harita şansından mı algoritmadan mı gelmiş ayrılamaz.
+
+### 0.1 Test tezgâhı ile hedef senaryo arasındaki bilinen fark
+
+| | Strike Mission (burası) | rs1 / EW (hedef) |
+|---|---|---|
+| ajan rolleri | **simetrik** (iki uçak aynı) | **asimetrik** (recon + striker) |
+| tehdit | radar halkaları, stokastik düşürülme | SAM, RF fizik motoru (Friis/Albersheim) |
+| aksiyon | 4 yön + NOOP | EW modu, chaff/flare, hedef radar, jamming gücü |
+| adaylar | IQL / VDN / QMIX | PPO / VDN'li DQN |
+
+**Rol asimetrisi buraya henüz taşınmadı.** VDN/QMIX'in IQL'i geçmesi için
+gereken kuplaj tam olarak oradan doğuyor (§0.4 radar alarm kuplajı bunun
+yerine geçici bir vekil). Sonuçları rs1'e taşırken bu fark akılda tutulmalı:
+burada IQL yeterli çıksa bile, asimetrik rollerde çıkmayabilir.
 
 Kardeş proje: [`MARL-Pathfinding`](../MARL-Pathfinding/PLAN.md) — ortam farklı,
 **ajan/eğitim/eval altyapısı birebir taşınacak.** Orada 5x5→50x50 yolculuğunda

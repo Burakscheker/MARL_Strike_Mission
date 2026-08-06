@@ -348,6 +348,9 @@ class StrikeMissionEnv:
             raise RuntimeError("Episode bitti — reset() cagir.")
 
         phi_before = {a: self._phi(a) for a in (AGENT_1, AGENT_2)}
+        # Bu adimda GERCEKTEN oynayan ajanlar (terminal shaping'i sadece
+        # onlara uygulanacak — bkz. asagidaki 6. blok).
+        active_before = {a: not self.terminal(a) for a in (AGENT_1, AGENT_2)}
         r_team = R_STEP
         r_ind = {AGENT_1: 0.0, AGENT_2: 0.0}
         for a in (AGENT_1, AGENT_2):
@@ -433,16 +436,35 @@ class StrikeMissionEnv:
                         r_ind[a] += R_TIMEOUT
 
         # --- 6) potential-based shaping (Ng ve ark. 1999)
-        # Phi(terminal) = 0 kosulu: episode'u BITIREN adimda uygulanmaz —
-        # policy-invariance garantisi bunu gerektiriyor (MARL-Pathfinding'de
-        # ayni gerekce ayrintili belgelendi).
-        if not self.done:
-            for agent in (AGENT_1, AGENT_2):
-                if self.terminal(agent):
-                    continue
-                shaping = SHAPING_COEF * (GAMMA * self._phi(agent) - phi_before[agent])
-                r_team += shaping
-                r_ind[agent] += shaping
+        # Phi(TERMINAL) = 0 — politika-degismezligin sarti.
+        #
+        # ESKI KOD BUNU YANLIS UYGULUYORDU: episode'u bitiren adimda shaping'i
+        # ATLIYORDU (`if not self.done`). Atlamak, Phi'yi sifirlamak DEGILDIR.
+        # Teleskopik toplam
+        #     sum_t COEF*(gamma*Phi_{t+1} - Phi_t) = COEF*(gamma^T*Phi_T - Phi_0)
+        # atlandiginda son terminal-OLMAYAN durumda kesilir; yani ajan
+        # Phi(oldugu yer) kadar shaping'i CEBINDE TUTAR. Haritanin ortasinda
+        # olen bir ajan icin bu ~+13 puan bedava kâr demekti ve tam olarak
+        # "olmek oyalanmaktan karli" tuzagini aciyordu:
+        #     OL(450. adim) -71.5  >  OYALAN(2800) -78     (eski, YANLIS)
+        # Uc algoritma da (IQL/VDN/QMIX) 1000 episode'da bu tuzaga dustu:
+        # olu(ma) 2.00'a, adim(ma) ~450'ye oturdu, ucunde de basari %0.
+        #
+        # DOGRUSU: terminal adimda Phi' = 0 ile shaping UYGULANIR. O zaman her
+        # yorunge icin toplam shaping = -COEF*Phi(baslangic) = SABIT olur
+        # (ustelik bizde dist_scale = dist[baslangic] oldugu icin Phi_0 = 0,
+        # yani toplam TAM SIFIR). Boylece:
+        #   - shaping adim adim yogun ogrenme sinyali vermeye DEVAM eder,
+        #   - ama hicbir bitis bicimine getiri avantaji SAGLAMAZ.
+        # Yeni siralama:  ULAS +30  >  OYALAN -78  >  OL -84.5
+        for agent in (AGENT_1, AGENT_2):
+            if not active_before[agent]:
+                continue                       # bu adimda zaten oynamadi
+            phi_after = (0.0 if (self.done or self.terminal(agent))
+                         else self._phi(agent))
+            shaping = SHAPING_COEF * (GAMMA * phi_after - phi_before[agent])
+            r_team += shaping
+            r_ind[agent] += shaping
 
         if self.done:
             info.update(self._terminal_info())

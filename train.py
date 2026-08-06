@@ -31,7 +31,10 @@ from env.two_agent import play_episode, play_episode_qmix, play_episode_vdn
 # Windows'ta stdout bir dosyaya/boruya yonlendirilince cp1252 kullaniliyor ve
 # Turkce karakterlerde UnicodeEncodeError veriyor (MARL-Pathfinding'de yasandi).
 try:
-    sys.stdout.reconfigure(encoding="utf-8")
+    # line_buffering: cikti bir dosyaya/boruya yonlendirildiginde Python
+    # varsayilan olarak ~8KB tamponlar; 30-60 dakikalik bir kosuda ilerleme
+    # ancak kosu BITINCE gorunur. Satir tamponu bunu canli hale getirir.
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 except Exception:
     pass
 
@@ -136,6 +139,14 @@ def main():
     ap.add_argument("--resume-from", default=None,
                     help="checkpoint yolu, ya da 'pathfinding' -> MARL-Pathfinding'in "
                          "egitilmis modelini otomatik bul")
+    ap.add_argument("--eps-start", type=float, default=None,
+                    help="epsilon'un BASLANGIC degeri (varsayilan C.EPS_START=1.0). "
+                         "DEVAM eden bir kosuda sart: egitilmis bir checkpoint'ten "
+                         "1.0 ile baslamak, ogrenilmis politikayi yuzlerce episode "
+                         "boyunca rastgele aksiyonlarla bozar. 0.2-0.4 tipik.")
+    ap.add_argument("--n-radar", type=int, default=None,
+                    help="radar sayisini SABITLE (curriculum'u kapatir). "
+                         "Verilmezse 10->40 rampasi kullanilir.")
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
@@ -190,16 +201,27 @@ def main():
     ma = {k: deque(maxlen=win) for k in ("team", "dead", "inner", "steps", "loss")}
     runner = RUNNER[algo]
     floor = max(1.0, episodes * C.EPS_FLOOR_FRAC)
+    # eps_progress 0..1 arasi bir ILERLEME; 0 -> EPS_START, 1 -> EPS_END.
+    # --eps-start verilirse o degere karsilik gelen ilerlemeden BASLANIR:
+    #     eps = EPS_START + frac*(EPS_END - EPS_START)  ->  frac0'i cozeriz.
+    frac0 = 0.0
+    if args.eps_start is not None:
+        span = C.EPS_START - C.EPS_END
+        frac0 = min(1.0, max(0.0, (C.EPS_START - args.eps_start) / span))
+        print(f"epsilon {args.eps_start:.2f}'den basliyor "
+              f"(ilerleme {frac0:.2f}), {C.EPS_END} tabanina "
+              f"ep {int(floor)} civarinda iner")
     t_start = time.perf_counter()
     best = -1.0
 
     for ep in range(1, episodes + 1):
-        set_eps(agent, algo, min(1.0, ep / floor))
+        set_eps(agent, algo, frac0 + (1.0 - frac0) * min(1.0, ep / floor))
         # Curriculum: radar sayisi 10 -> 40 rampalanir (bkz. sampler). Harita
         # tohumu VERILMEZ -> env kendi rng'sinden ceker, yani her episode taze
         # harita. Ezberlenecek sabit havuz yok; asiri ogrenmeye karsi asil
         # savunma bu (degerlendirme tohumlariyla da kesismiyor).
-        rk = ({"n_radar": curriculum_n_radar(ep, episodes)}
+        rk = ({"n_radar": (args.n_radar if args.n_radar is not None
+                           else curriculum_n_radar(ep, episodes))}
               if env.radar_random else None)
         info, losses = runner(env, agent, train=True, reset_kwargs=rk)
 
@@ -238,7 +260,7 @@ def main():
             log_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
                             *[f"{m[k]:.4f}" for k in METRIC_KEYS]])
             log_f.flush()
-            print(f"  [eval ep{ep}] {fmt_eval(m)}")
+            print(f"  [eval ep{ep}] {fmt_eval(m)}", flush=True)
             score = m["team_success"] + m["analytic_surv_team"]
             stem = os.path.join(C.RUNS_DIR, "ckpt", tag)
             if score >= best:

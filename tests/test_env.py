@@ -179,11 +179,22 @@ def test_reward_terminals():
     # ikisini de hedefin bir adim yanina koy
     g = C.GOAL
     env.pos = {C.AGENT_1: (g[0] - 1, g[1]), C.AGENT_2: (g[0], g[1] - 1)}
+    # TERMINAL SHAPING'I HESABA KAT: Phi(terminal)=0 kurali geregi son adimda
+    # her ajan -COEF*Phi(onceki konum) alir (bkz. strike_env 6. blok). Burada
+    # ajanlar hedefin DIBINE isinlandigi icin Phi~1 ve bu terim -120*2 kadar.
+    # Gercek bir episode'da bu, yol boyunca toplanan +COEF*Phi ile BIREBIR
+    # sadelesir (toplam shaping = -COEF*Phi_0 = 0), ama tek adimi baglamindan
+    # kopuk olcen bu testte acikca eklenmeli — yoksa test, dogru davranisi
+    # hata sanar (bir kez sandi).
+    phi = {a: env._phi(a) for a in (C.AGENT_1, C.AGENT_2)}
+    term_shaping = sum(C.SHAPING_COEF * (C.GAMMA * 0.0 - phi[a])
+                       for a in (C.AGENT_1, C.AGENT_2))
     _, r, done, info = env.step({C.AGENT_1: C.DOWN, C.AGENT_2: C.RIGHT})
     check("ikisi de ayni anda varinca episode biter", done)
-    check("ilk+ikinci varis odulu",
-          abs(r - (C.R_STEP + C.R_FIRST_GOAL + C.R_SECOND_GOAL)) < 1e-5,
-          f"r={r:.3f}")
+    beklenen = (C.R_STEP + C.R_FIRST_GOAL + C.R_SECOND_GOAL
+                + term_shaping) * C.REWARD_SCALE
+    check("ilk+ikinci varis odulu (terminal shaping dahil)",
+          abs(r - beklenen) < 1e-3, f"r={r:.3f} beklenen={beklenen:.3f}")
     check("both_reached", info["both_reached"])
     check("takim basarisi", info["team_success"])
 

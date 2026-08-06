@@ -55,12 +55,29 @@ TRAIN_SEED_MAX = 100_000_000
 # haritalar 40'a sigmiyor (olculdu), 120 bol tampon.
 MAP_MAX_ITER = 120
 
-# Halka yariciplari (hucre). 220x220 -> +-110, 140x140 -> +-70.
-# |d| <= HALF kullaniliyor: kenar 2*HALF+1 = 221 / 141 hucre. Nominal 220/140
-# yerine 221/141 olmasi (%0.45 fark) bilincli — merkez etrafinda TAM SIMETRIK
-# kare veriyor, tek hucrelik kayma ogrenmeyi hicbir sekilde etkilemiyor.
-OUTER_HALF = 110
-INNER_HALF = 70
+# Halka yariciplari (hucre). 160x160 -> +-80, 100x100 -> +-50.
+# |d| <= HALF kullaniliyor: kenar 2*HALF+1 = 161 / 101 hucre.
+#
+# 220/140 -> 160/100 KUCULTMESI (Burak, 2026-08-06: "160'a 100 yap, mecbur").
+# GEREKCE (olculdu, baselines/scan_random_maps): 40 radar x 221^2 = 1.95M hucre,
+# grid 1M hucre — yani radar alani gridin IKI KATI. Sonuc: haritanin sadece
+# %17.7'si guvenli, %52.2'si IC halka ve oracle tavani %17.6 (medyan %9.3).
+# Yani MUKEMMEL politika bile episode'larin %70'inde basarisiz gorunuyordu;
+# uc algoritmayi ayirt etmek icin gereken sinyal gurultunun altinda kaliyordu.
+#   40 radar, 220/140 -> guvenli %17.7   oracle %17.6
+#   40 radar, 160/100 -> guvenli %38.6   oracle %63.4
+#   40 radar, 120/76  -> guvenli %57.8   oracle %87.3
+# 160/100 orta yol: harita hala yogun ve gercek yol planlamasi gerektiriyor
+# (guvenli hucre %38.6, serbest alan perkolasyon esigi ~%59'un ALTINDA degil,
+# yani koridorlar var ama bulunmasi gerekiyor), ama tavan olculebilir bir
+# bolgeye cikiyor. Radar SAYISI (40) ve rastgelelik AYNEN korunuyor.
+#
+# Otomatik uyum: P_DEATH asagida 2*HALF+1 caprazlama adimindan turedigi icin
+# adim basi hazard kendini yeniden kalibre eder; PATCH_STRIDE=16 ile gozlem
+# penceresi +-160 hucre gordugu icin 161 genisligindeki dis halkanin TAMAMI
+# hala tek karede goruluyor.
+OUTER_HALF = 80
+INNER_HALF = 50
 
 # Adim limiti. Optimal yol = manhattan(B,H) = 1998 adim. 1.4x tampon.
 MAX_STEPS = 2800
