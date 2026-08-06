@@ -1010,7 +1010,17 @@ bir şeyi var ve `surv_ratio` bunu gürültüsüz ölçüyor.
 > `STEP=20` ve sabit 3 radar gömülü. Yerine `viz/plot_random.py` geçti
 > (harita başına radar setini episode kaydından okuyor).
 
-### 11.10 İlk eğitim koşusu — ajan ödül fonksiyonunu hackledi 🚨
+### 11.10 İlk eğitim koşusu — ~~ajan ödül fonksiyonunu hackledi~~ ❌ YANLIŞ TEŞHİS
+
+> ## ⛔ BU BÖLÜMÜN TEŞHİSİ YANLIŞTI — önce §11.11'i oku
+>
+> Aşağıda "ajan intihar açığını buldu ve sömürdü" yazıyor. **Değil.**
+> `R_ALL_DEAD`'i −25'ten −50'ye çekip aynı tohumla yeniden koştum:
+> eğitim log'ları **byte-byte aynı** çıktı. Ödül değişikliği ajanın tek bir
+> aksiyonunu bile değiştirmedi. Gerçek neden §11.11'de.
+>
+> Aşağıdaki **aritmetik hata gerçek** (gate eşitsizliğinde adım maliyeti
+> eksikti) ve düzeltmesi doğru; ama gözlenen çöküşün **sebebi o değildi**.
 
 `train.py --algo vdn --episodes 600 --resume-from runs/ckpt/vdn_fixed.pt`
 (3 radarlı sabit haritada eğitilmiş model üzerinden; transfer **14/14 tensör,
@@ -1077,6 +1087,58 @@ surv_ratio   = mission_prob / oracle_surv
 
 Gürültüsüz (zar yok), şişirilemez (hareket etmemek 0 verir), ve doğrudan
 oracle'la kıyaslanabilir. **Raporda `agent_surv_best` KULLANILMAYACAK.**
+
+### 11.11 🔑 ASIL BULGU: ödül BÜYÜKLÜĞÜ gradyana hiç girmiyor
+
+`R_ALL_DEAD`'i −25 → −50 yapıp aynı tohumla yeniden koştum. Beklenti:
+davranış değişir. Gerçek: `runs/vdn_tr600_episodes.csv` ile
+`runs/vdn_fix600_episodes.csv` **birebir aynı** (log'lar da). Koşunun
+başlığı `-80.0` yazıyor, yani yeni değer gerçekten kullanıldı.
+
+**Kontrollü deney** (aynı tohum, 25 episode, sadece `R_ALL_DEAD` değişiyor):
+
+| `R_ALL_DEAD` | trajektori |
+|---:|---|
+| −25 (referans) | — |
+| −80 | **AYNI** |
+| **−5000** | **AYNI** |
+
+Ödülü 200 katına çıkarmak bile tek bir aksiyonu değiştirmiyor.
+
+**Neden.** İki şey üst üste biniyor:
+
+1. **Huber (`smooth_l1_loss`) doygunluğu.** `|TD hatası| > 1` olduğunda
+   gradyan sabit ±1 — büyüklük taşınmıyor, sadece **işaret**. Bizim terminal
+   ödüllerimiz −50…−5000 aralığında, yani her zaman doygun bölgede.
+2. **Çok düşük LR.** `VDN_LR = 3e-5`, gradyan tavanı 1 → tek güncellemede Q
+   en fazla `3e-5` hareket eder. 600 episode'da ~33k güncelleme, üstelik
+   terminal geçişler tampondaki satırların yalnızca **%0.2**'si. Q, hedefe
+   asla yaklaşamıyor; iki farklı hedef arasındaki fark hiç materyalize
+   olmuyor.
+
+**Sonuç — bütün ödül kalibrasyonu çalışması bu ölçekte etkisiz.** Kapılar
+(§11.8), `R_TIMEOUT`, `R_ALL_DEAD`, `R_FIRST_GOAL`... hepsi doygun bölgede
+kalıyor. Politikayı fiilen belirleyen tek şey **yoğun, küçük genlikli**
+sinyaller: shaping (~±0.048/adım) ve risk maliyeti — çünkü onlar Huber'in
+karesel bölgesinde ve geçişlerin **%100'ünde** var.
+
+Bu, gözlenen davranışı da tam açıklıyor: ajan shaping'in dediğini yapıyor
+("hedefe doğru git"), harita %52 iç halka olduğu için ilerledikçe ölüyor.
+**Ödül hackleme yok — ödül fonksiyonunun yarısı hiç okunmuyor.**
+
+**Yapılacak (sıradaki iş, ölçülecek):**
+- [ ] Ödülleri ölçekle: hepsini ~20'ye böl (terminal ~±2.5, yoğun ~±0.0024)
+      **veya** `smooth_l1_loss(..., beta=…)` ile Huber eşiğini ödül ölçeğine
+      taşı. İkisi de tek satır; **hangisinin işe yaradığı ölçülecek.**
+- [ ] Doğrulama testi: `R_ALL_DEAD`'i 2 katına çıkarınca trajektori
+      **değişmeli**. Şu an değişmiyor ve bu bir regresyon testi olmalı.
+- [ ] Ondan sonra §11.8 kapıları anlamlı hale gelir; şu an sadece kâğıt
+      üzerinde doğrular.
+
+> **Ders:** "ödül fonksiyonunu doğru yazdım" yetmiyor — öğrenicinin o
+> ödülü **görebildiğini** de kanıtlamak gerekiyor. Kontrollü deney (aynı
+> tohum, tek değişken) 20 dakikada cevap verdi; tahmin yürütmek saatlerce
+> yanlış yönde gitmeye mal olurdu.
 
 #### 11.10c Durum
 
