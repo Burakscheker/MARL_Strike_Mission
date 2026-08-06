@@ -87,6 +87,24 @@ class StrikeMissionEnv:
         s1, s2, g = config if config is not None else (self.start, self.start, self.goal)
         self.goal = g
 
+        # SHAPING OLCEGI — harita basina, max_man DEGIL.
+        # BUG (bulundu ve duzeltildi): Phi ve gozlem skalari #11 eskiden
+        # `min(1, dist/max_man)` ile normalize ediliyordu, max_man = 2(n-1) =
+        # 1998. Ama self.dist RISK-mesafesi: bir ic halkaya girmek
+        # RISK_W * 0.9 = 675 adim-esdegeri ekliyor. Radar yogunlastikca
+        # dist(B) max_man'i ASIYOR (40 radarli haritada ~3600 olculdu) ve
+        # min(1, ...) kirpmasi devreye girip Phi'yi 0'a KILITLIYOR — ajan
+        # haritanin buyuk kisminda nereye giderse gitsin ayni potansiyeli
+        # goruyor, yani shaping gradyani tam ihtiyac duyulan yerde OLU.
+        # (Ayni kirpma skalar #11'i de sabit 1.0'a sabitliyordu: "hedefe ne
+        # kadar kaldi" bilgisi gozlemden tamamen siliniyordu.)
+        # Cozum: olcegi haritanin KENDI baslangic maliyetinden al. Boylece
+        # Phi(B) ~ 0, Phi(H) = 1 HER haritada — radar yogunlugundan bagimsiz.
+        # Potential-based shaping HERHANGI bir Phi icin politika-degismezdir
+        # (Ng, Harada, Russell 1999), yani bu degisiklik teorik garantiyi
+        # bozmaz; sadece sinyali geri getirir.
+        self.dist_scale = max(float(self.dist[s1]), float(self.dist[s2]), 1.0)
+
         self.pos = {AGENT_1: s1, AGENT_2: s2}
         self.path = {AGENT_1: [s1], AGENT_2: [s2]}
         self.alive = {AGENT_1: True, AGENT_2: True}
@@ -215,7 +233,10 @@ class StrikeMissionEnv:
             man_goal / self.max_man,
             (other[0] - own[0]) / n, (other[1] - own[1]) / n,
             man_other / self.max_man,
-            min(1.0, d_own / self.max_man),
+            # "hedefe ne kadar kaldi" — RISK mesafesi, o yuzden olcek de risk
+            # tabanli (dist_scale). max_man ile bolununce yogun haritada sabit
+            # 1.0'a satüre oluyordu, yani bilgisiz bir sabit girdiye donuyordu.
+            min(1.0, d_own / self.dist_scale),
             *nb,
         ], dtype=np.float32)
         return np.concatenate([ch.ravel(), scalars])
@@ -245,8 +266,11 @@ class StrikeMissionEnv:
     def _phi(self, agent: int) -> float:
         """Potential-based shaping potansiyeli: 1 = hedefte, 0 = en uzak.
         RISK-FARKINDA mesafeden (Manhattan degil) — yani "hedefe yaklasmak"
-        radardan gecerek yaklasmayi ODULLENDIRMEZ."""
-        return 1.0 - min(1.0, float(self.dist[self.pos[agent]]) / self.max_man)
+        radardan gecerek yaklasmayi ODULLENDIRMEZ.
+
+        Olcek self.dist_scale (harita basina, bkz. reset()); max_man ile
+        normalize etmek yogun haritalarda Phi'yi 0'a kilitliyordu."""
+        return 1.0 - min(1.0, float(self.dist[self.pos[agent]]) / self.dist_scale)
 
     def step(self, actions) -> tuple[dict[int, np.ndarray], float, bool, dict]:
         if self.done:

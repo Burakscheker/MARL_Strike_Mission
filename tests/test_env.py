@@ -239,6 +239,51 @@ def test_reentry_rolls_again():
           f"olculen={rate:.3f} beklenen={expect:.3f}")
 
 
+def test_phi_not_saturated():
+    """Phi YOGUN haritada da 0'a kilitlenmemeli — regresyon testi.
+
+    Eskiden `Phi = 1 - min(1, dist/max_man)` idi; dist RISK-mesafesi oldugu
+    icin yogun radar dizilisinde max_man'i asiyor ve kirpma Phi'yi 0'a
+    sabitliyordu. Olculdu (15 rastgele 40-radar haritasi): dist(B)/max_man
+    ortalama 1.29, en kotu 1.75, 14/15 haritada 1'i asiyor — yani oracle
+    yolunun ortalama %16.5'inde shaping sinyali TAMAMEN olu idi, ustelik
+    tam da baslangicta. Artik olcek harita basina dist_scale.
+    """
+    import numpy as np
+
+    from baselines.risk_oracle import (RISK_W, build_risk_distance_map,
+                                       build_zone_map, direction_costs)
+
+    env = StrikeMissionEnv(seed=0)
+    env.pos[C.AGENT_1] = C.START
+    phi_b = env._phi(C.AGENT_1)
+    env.pos[C.AGENT_1] = C.GOAL
+    phi_h = env._phi(C.AGENT_1)
+    check("Phi(B) = 0", abs(phi_b) < 1e-6, f"{phi_b:.4f}")
+    check("Phi(H) = 1", abs(phi_h - 1.0) < 1e-6, f"{phi_h:.4f}")
+
+    # YOGUN harita: 40 radar. Kirpma devreye girerse Phi yol boyunca uzun sure
+    # 0'da kalir; dist_scale ile monoton artmali.
+    rng = np.random.default_rng(0)
+    radars = [(int(rng.integers(0, C.GRID_N)), int(rng.integers(0, C.GRID_N)))
+              for _ in range(40)]
+    z = build_zone_map(C.GRID_N, radars, C.OUTER_HALF, C.INNER_HALF)
+    d = build_risk_distance_map(zone=z, risk_w=RISK_W, mode=C.HAZARD_MODE,
+                                max_iter=120)
+    path = greedy_path(C.START, C.GOAL, d,
+                       direction_costs(z, RISK_W, C.HAZARD_MODE))
+    scale = max(float(d[C.START]), 1.0)
+    max_man = 2 * (C.GRID_N - 1)
+    check("yogun haritada dist(B) max_man'i asiyor (kirpma tuzagi gercek)",
+          float(d[C.START]) > max_man, f"{d[C.START]:.0f} > {max_man}")
+
+    phis = [1.0 - min(1.0, float(d[c]) / scale) for c in path[::50]]
+    dead = sum(1 for v in phis if v == 0.0)
+    check("dist_scale ile Phi yolun basinda olu degil", dead <= 1, f"{dead} ornek 0")
+    check("dist_scale ile Phi monoton artiyor",
+          all(b >= a - 1e-6 for a, b in zip(phis, phis[1:])))
+
+
 def main():
     print("\n=== geometri ===")
     test_zone_geometry()
@@ -247,6 +292,7 @@ def main():
     test_dims()
     test_masks()
     test_terminal_obs_keeps_updating()
+    test_phi_not_saturated()
     print("\n=== risk modeli ===")
     test_simulation_matches_analytic()
     test_safe_path_never_dies()

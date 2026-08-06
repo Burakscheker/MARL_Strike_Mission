@@ -684,48 +684,76 @@ harita şansıyla 10 kat oynuyor, ajanın iyi mi kötü mü olduğunu söylemiyo
 > ⚠️ Bu bölümün ilk hali hatalıydı: shaping terimini hesaba katmıyor ve
 > düzeltilmemiş oracle sayılarını kullanıyordu. Aşağısı düzeltilmiş hali.
 
-**Sorun A — Φ potansiyeli SATÜRE oluyor (asıl sorun).**
+**Sorun A — Φ potansiyeli başlangıçta SATÜRE oluyor.** ✅ *düzeltildi*
 
-`_phi()` şöyle: `Φ = 1 − min(1, dist/max_man)`, `max_man = 2(n−1) = 1998`.
-Ama `dist` **risk-mesafesi**: `1 adım + 1500 × p(giriş)`. Bir iç halkaya
-girmek `1500 × 0.9 = 1350` adım-eşdeğeri ekliyor. 40 radarlı haritada
-B'den hedefe risk-mesafe ≈ `1998 + 1500×(0.2+0.9) ≈ 3648`, yani
-`dist/max_man ≈ 1.83 > 1` → **Φ(B) = 0 ve haritanın büyük kısmında 0'da
-çakılı kalıyor.** Shaping gradyanı tam da ihtiyaç duyulan yerde ölü.
+`_phi()` şöyleydi: `Φ = 1 − min(1, dist/max_man)`, `max_man = 2(n−1) = 1998`.
+Ama `dist` **risk-mesafesi**: `1 adım + RISK_W × p(giriş)`. Bir iç halkaya
+girmek `750 × 0.9 = 675` adım-eşdeğeri ekliyor, yani `dist` `max_man`'i
+aşabiliyor ve `min(1, …)` kırpması Φ'yi 0'a kilitliyor.
 
-Aynı `min(1.0, d_own/max_man)` kırpması gözlem skaları #11'i de satüre
-ediyor — ajan "hedefe ne kadar kaldı"yı göremiyor.
+**Ölçüldü** (15 rastgele 40-radar haritası, `RISK_W = 750`):
 
-**Düzeltme:** normalizasyon episode'un KENDİ haritasına göre yapılmalı:
+| | değer |
+|---|---:|
+| `dist(B) / max_man` ortalama | **1.29** |
+| aynı oran, en kötü harita | **1.75** |
+| `max_man`'i aşan harita | **14/15** |
+| oracle yolunun Φ=0 olan kısmı, ortalama | **%16.5** |
+| aynı, en kötü harita | **%38.3** |
+
+> ⚠️ Bu bölümün ilk hali "haritanın büyük kısmı" diyordu — **abartıydı.**
+> Gerçek: yolun ortalama **%16.5**'i sinyalsiz. Ama bu ölü bölge tam olarak
+> **başlangıçta**, yani ajanın her episode'a başladığı ve yönlendirmeye en
+> çok ihtiyaç duyduğu yerde. Düzeltmeye değer, ama "shaping tamamen ölü"
+> değil.
+
+**Düzeltme (uygulandı):** normalizasyon episode'un KENDİ haritasına göre:
 ```python
-self.dist_scale = max(float(self.dist[START]), 1.0)   # reset()'te, harita başına
-Φ = 1.0 - min(1.0, dist[pos] / self.dist_scale)       # Φ(B)≈0, Φ(H)=1 her haritada
+self.dist_scale = max(dist[s1], dist[s2], 1.0)    # reset()'te, harita başına
+Φ = 1.0 - min(1.0, dist[pos] / self.dist_scale)   # Φ(B)≈0, Φ(H)=1 her haritada
 ```
-Potential-based shaping **herhangi bir Φ** için politika-değişmez (Ng ve ark.),
-yani bu düzeltme kanıtı bozmaz — sadece sinyali geri getirir.
+Aynı kırpma gözlem skaları #11'i (`min(1, d_own/max_man)`) de sabit 1.0'a
+sabitliyordu — ajan "hedefe ne kadar kaldı"yı hiç göremiyordu; o da
+`dist_scale` ile normalize edildi.
+
+Potential-based shaping **herhangi bir Φ** için politika-değişmez (Ng ve
+ark. 1999), yani bu düzeltme teorik garantiyi bozmaz — sadece sinyali geri
+getirir.
+
+**Yan bulgu — `d` ile `survival_prob` tutarsız.** Ölçümde bir harita
+`dist(B) = 1998` (yani maliyet modeline göre tamamen güvenli yol var) ama
+`survival_prob = 0.100` verdi. Sebep: B **bir iç halkanın içinde** ve
+`survival_prob` `prev = 0`'dan başladığı için ilk hücrede %90'lık zar
+atıyor; `direction_costs` ise sadece hücreler arası GEÇİŞLERİ ücretlendirdiği
+için bunu hiç görmüyor. §11.3'teki "kalkış istisnası" maddesi bu — ölçümle
+doğrulandı, `prev = z[START]` düzeltmesi yapılınca ikisi tutarlı olacak.
 
 **Sorun B — oyalanma teşviki.** Φ düzeltildikten sonra bile, medyan haritada
 (oracle %8) beklenen değerler:
 
 | | uçmak | oyalanmak |
 |---|---:|---:|
+| | uçmak | oyalanmak |
+|---|---:|---:|
 | ilk/ikinci varış | +7.7 | 0 |
 | ölüm cezaları | −36.1 | 0 |
 | adım maliyeti | −20.2 | −28.0 |
-| risk_shaping peşin ödemesi | −33.0 | 0 |
+| risk_shaping peşin ödemesi (`R_RISK_COEF=7.5` ile) | −16.5 | 0 |
 | `R_TIMEOUT` | 0 | −10.0 |
-| **toplam** | **≈ −81.6** | **≈ −38.0** |
+| **toplam** | **≈ −65.1** | **≈ −38.0** |
 
-Oyalanmak **43 puan daha kârlı**. Bunu kapatan iki kaldıraç var:
+Oyalanmak hâlâ **27 puan daha kârlı**. İki kaldıraç:
 
-1. **`R_TIMEOUT = −50`** — denememek, deneyip ölmekten pahalı olmalı.
-2. **`risk_shaping` riski İKİ KEZ sayıyor.** `R_RISK_COEF × p` peşin
-   ödeniyor *ve* ayrıca stokastik `R_DEATH` zarı atılıyor. `R_RISK_COEF = 15
-   = |R_DEATH|` olduğu için ajanın efektif risk kaçınması **spec'in 2 katı**.
-   config'de bu "varyans azaltma" diye belgelenmiş ama varyans azaltma
-   normalde stokastik terimi *değiştirir*, üstüne *eklemez*.
-   **Öneri:** `R_RISK_COEF = 7.5` (yarısı) — dense sinyal korunur, toplam
-   risk kaçınması spec'e döner. Ablation olarak 0 ve 15 de koşulur.
+1. **`risk_shaping` riski İKİ KEZ sayıyordu** ✅ *düzeltildi*.
+   `R_RISK_COEF × p` peşin ödeniyor *ve* ayrıca stokastik `R_DEATH` zarı
+   atılıyor; ikisinin de beklenen değeri `|R_DEATH| × p`. `R_RISK_COEF = 15
+   = |R_DEATH|` olduğu için ajanın efektif risk kaçınması **spec'in 2 katıydı**
+   — tasarladığımızdan ürkek bir politika. `R_RISK_COEF = 7.5` yapıldı; iki
+   terimin toplamı artık spec'teki tek cezaya eşit. Ablation olarak 0.0
+   (sadece stokastik) ve 15.0 (eski) da koşulmalı.
+2. **`R_TIMEOUT = −50`** ⏳ *bekliyor* — denememek, deneyip ölmekten pahalı
+   olmalı. Bu, rastgele harita geçişiyle birlikte yapılacak (§11.7 adım 2);
+   sabit haritada oyalanma teşviki yok çünkü orada tavan %100.
 
 `R_DEATH = −15` ve `R_FIRST_GOAL = +50` aynı kalır (ölüm cezasını büyütmek
 ajanı daha ürkek yapar, ters etki).
@@ -852,16 +880,19 @@ mü söylenemez (oracle da %17.6 ise mükemmeldir).
 
 **Sırayla yapılmalı** — 1 ve 2 düzeltilmeden eğitim koşmanın anlamı yok.
 
-**1. Öğrenme sinyalini geri getir (§11.2 Sorun A)**
-- [ ] `env/strike_env.py` `reset()`: `self.dist_scale = max(float(self.dist[START]), 1.0)`
-- [ ] `_phi()` ve gözlem skaları #11: `max_man` yerine `dist_scale` ile normalize
-- [ ] Doğrulama: 40 radarlı bir haritada `Φ(B) ≈ 0`, `Φ(H) = 1`, ve yol boyunca
-      **monoton artıyor** (şu an B'den itibaren 0'da çakılı)
+**1. Öğrenme sinyalini geri getir (§11.2 Sorun A)** — ✅ **YAPILDI**
+- [x] `env/strike_env.py` `reset()`: `self.dist_scale = max(dist[s1], dist[s2], 1.0)`
+- [x] `_phi()` ve gözlem skaları #11: `max_man` yerine `dist_scale`
+- [x] Doğrulandı: `Φ(B) = 0.0000`, `Φ(H) = 1.0000`, oracle yolu boyunca monoton
+      artıyor; ölçüm 15 rastgele haritada tekrarlandı (§11.2 tablosu)
 
-**2. Ödül kalibrasyonu (§11.2 Sorun B)**
-- [ ] `config.py`: `R_TIMEOUT = -50`, `R_RISK_COEF = 7.5`
+**2. Ödül kalibrasyonu (§11.2 Sorun B)** — kısmen
+- [x] `config.py`: `R_RISK_COEF = 15.0 → 7.5` (risk iki kez sayılıyordu)
+- [x] `risk_oracle.risk_distance_map` önbellek adına `risk_w` eklendi —
+      `RISK_W` 1500→750 düşünce eski önbellek sessizce okunuyordu
+- [ ] `config.py`: `R_TIMEOUT = -50` (rastgele haritaya geçerken, adım 3 ile)
 - [ ] `baselines/policies.py` ile doğrula: scripted oracle'ın episode getirisi
-      oyalanan politikadan **yüksek** çıkmalı (şu an çıkmıyor)
+      oyalanan politikadan **yüksek** çıkmalı
 
 **3. Rastgele harita altyapısı**
 - [ ] `config.py`: `N_RADAR = 40`, `RADAR_RANDOM = True`, curriculum sabitleri,

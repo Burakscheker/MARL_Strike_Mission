@@ -174,16 +174,19 @@ def build_risk_distance_map(goal=GOAL, zone: np.ndarray | None = None,
 
 
 def risk_distance_map(cache: str | None = RISK_CACHE, verbose: bool = False,
-                      mode: str = HAZARD_MODE) -> np.ndarray:
-    # Onbellek adi MODU icerir: per_step ve per_entry TAMAMEN farkli haritalar
-    # uretiyor, ayni dosyaya yazilirsa mod degistirince sessizce yanlis harita
-    # kullanilir (ve hicbir yerde patlamaz — en tehlikeli hata turu).
+                      mode: str = HAZARD_MODE,
+                      risk_w: float = RISK_W) -> np.ndarray:
+    # Onbellek adi MOD ve RISK_W'yi icerir: ikisi de haritayi TAMAMEN
+    # degistiriyor, ayni dosyaya yazilirsa parametre degisince sessizce yanlis
+    # harita kullanilir (ve hicbir yerde patlamaz — en tehlikeli hata turu).
+    # risk_w eklendi cunku R_RISK_COEF 15.0 -> 7.5 olunca RISK_W de
+    # 1500 -> 750 dustu ve eski onbellek gecerliymis gibi okunuyordu.
     if cache:
         root, ext = os.path.splitext(cache)
-        cache = f"{root}_{mode}{ext}"
+        cache = f"{root}_{mode}_w{risk_w:g}{ext}"
         if os.path.exists(cache):
             return np.load(cache)
-    d = build_risk_distance_map(verbose=verbose, mode=mode)
+    d = build_risk_distance_map(verbose=verbose, mode=mode, risk_w=risk_w)
     if cache:
         os.makedirs(os.path.dirname(cache) or ".", exist_ok=True)
         np.save(cache, d)

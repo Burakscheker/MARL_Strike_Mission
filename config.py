@@ -93,13 +93,20 @@ R_SECOND_GOAL = +12.0          # ikinci ucak da vardi ("ikide olsa" bonusu)
 R_ALL_DEAD = -10.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 R_TIMEOUT = -10.0              # hicbiri varmadan sure doldu
 
-# Adim basi risk maliyeti = R_RISK_COEF * p_death(hucre).
-# Bu bir VARYANS AZALTMA araci: stokastik olum cezasinin BEKLENEN degerini
-# pesin odetiyor. Katsayi |R_DEATH| ile ayni tutulunca iki terim yaklasik
-# ayni beklenen degeri tasir — yani ekstra bir "on yargi" enjekte etmiyor,
-# sadece seyrek/gurultulu sinyali yogun/deterministik hale getiriyor.
-# 0.0 verilirse tamamen kapanir (--no-risk-shaping).
-R_RISK_COEF = 15.0
+# Adim basi risk maliyeti = R_RISK_COEF * p_death(hucre). Seyrek/gurultulu
+# olum sinyalini yogun/deterministik hale getirir. 0.0 -> kapali.
+#
+# 15.0 -> 7.5 DUZELTMESI: eski deger |R_DEATH| ile ayniydi ve yorum bunu
+# "varyans azaltma" diye gerekcelendiriyordu. Ama varyans azaltma normalde
+# stokastik terimin YERINE gecer; burada USTUNE ekleniyordu:
+#     tehlikeli hucre  ->  R_RISK_COEF * p   (pesin, deterministik)
+#                      ->  ayrica zar at, olursen R_DEATH   (stokastik)
+# Ikisinin beklenen degeri de |R_DEATH| * p oldugu icin risk EFEKTIF OLARAK
+# IKI KEZ cezalandiriliyordu: ajanin risk kacinmasi spec'in 2 kati, yani
+# tasarlanandan daha urkek bir politika ogreniyordu.
+# 7.5 = |R_DEATH| / 2 ile iki terimin TOPLAMI spec'teki tek cezaya esitlenir.
+# Ablation olarak 0.0 (sadece stokastik) ve 15.0 (eski) de kosulmali.
+R_RISK_COEF = 7.5
 
 # ---------------------------------------------------------------- egitim (ortak)
 SEED = 0
