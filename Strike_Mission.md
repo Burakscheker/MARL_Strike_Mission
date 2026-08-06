@@ -1010,6 +1010,84 @@ bir şeyi var ve `surv_ratio` bunu gürültüsüz ölçüyor.
 > `STEP=20` ve sabit 3 radar gömülü. Yerine `viz/plot_random.py` geçti
 > (harita başına radar setini episode kaydından okuyor).
 
+### 11.10 İlk eğitim koşusu — ajan ödül fonksiyonunu hackledi 🚨
+
+`train.py --algo vdn --episodes 600 --resume-from runs/ckpt/vdn_fixed.pt`
+(3 radarlı sabit haritada eğitilmiş model üzerinden; transfer **14/14 tensör,
+%100** yüklendi — B/H aynı, `OBS_DIM` aynı).
+
+```
+ep  25   olu(ma)=0.52   adim(ma)=2529   takim 0.0%
+ep 300   olu(ma)=1.99   adim(ma)= 647   takim 1.0%
+ep 600   olu(ma)=2.00   adim(ma)= 446   takim 0.0%     demo: 0/6
+```
+
+Adım sayısı **2529 → 446** düşerken ölüm **2.00**'a çıktı. Bu, öğrenilen
+davranışın "hedefe git" değil **"erken öl, episode'u bitir"** olduğunun
+imzası — yani §11.8'de kapattığımı sandığım Kapı 2.
+
+**Kök neden — gate eşitsizliği eksikti.** `2·R_DEATH + R_ALL_DEAD ≤ R_TIMEOUT`
+yazmıştım (−55 ≤ −50 ✓) ve kapalı sandım. **Adım maliyetini unutmuşum:**
+erken ölen ajan kalan adımların maliyetinden de kurtuluyor. 2800 adımlık bir
+episode'da bu **−28 puan**. Doğrusu:
+
+```
+2·R_DEATH + R_ALL_DEAD  ≤  R_TIMEOUT + MAX_STEPS · R_STEP
+```
+
+**Ölçüldü** (aynı harita, scripted politikalar — tahmin değil):
+
+| | getiri | adım | ölü |
+|---|---:|---:|---:|
+| İNTİHAR (`R_ALL_DEAD=−25`) | **−53.85** | 267 | 2 |
+| OYALANMA | −77.92 | 2800 | 0 |
+| İNTİHAR (`R_ALL_DEAD=−50`, düzeltilmiş) | **−78.85** | 267 | 2 |
+
+`R_ALL_DEAD = −50` ile açık kapandı (−80 ≤ −78). Test de düzeltildi:
+`test_reward_hacking_gates` artık adım maliyetini içeriyor.
+
+**Ders:** ödül hackleme açığını *tasarımda* kapattığını sanmak yetmiyor;
+eşitsizliği **bütün terimlerle** yazmak ve **ölçmek** gerekiyor. Ajan 600
+episode'da benim gözden kaçırdığım 23 puanlık boşluğu buldu.
+
+#### 11.10b Metrik de şişiyordu — `mission_prob`
+
+Aynı koşuda `surv1 = 0.412` çıkıyordu, oracle ortalamasına (0.49) yakın —
+"ajan neredeyse oracle kadar iyi" gibi. **Yanlış.** `survival_prob` *gidilen*
+yolu ölçer; yarıda ölen ajanın yolu kısa kalır ve "güvenli" görünür. Uç
+noktada hiç hareket etmeyen ajan `surv = 1.000` alır.
+
+Ölçüldü (20 held-out harita, eğitilmiş model):
+
+| metrik | değer | yorum |
+|---|---:|---|
+| `agent_surv_best` (eski) | **0.6980** | oracle'dan (0.3769) **büyük** — saçma |
+| `mission_prob` (yeni) | **0.0000** | dürüst |
+| rotası hedefe varıyor | **%5** (1/20) | |
+| `surv_ratio` | **0.0004** | |
+
+**Düzeltme:** `StrikeMissionEnv(death_enabled=False)` eklendi — zar atılmaz,
+uçak ölmez, ajanın **niyet ettiği tam rota** gözlenir. Analitik hayatta kalma
+o rota üzerinden hesaplanır ve **hedefe varmayan rota 0 alır**:
+
+```
+mission_prob = survival_prob(rota)  eğer rota hedefe varıyorsa,  yoksa 0
+surv_ratio   = mission_prob / oracle_surv
+```
+
+Gürültüsüz (zar yok), şişirilemez (hareket etmemek 0 verir), ve doğrudan
+oracle'la kıyaslanabilir. **Raporda `agent_surv_best` KULLANILMAYACAK.**
+
+#### 11.10c Durum
+
+İlk koşu **başarısız ve bu beklenen** — ödül açığı açıkken öğrenilen politika
+zaten görevle ilgisizdi. Düzeltmelerle yeniden koşuluyor. Bilinen kalan
+zorluk: 2800 adımlık ufuk. `ep 25`'te ajan hâlâ 2529 adım harcayıp hedefe
+varamıyor; sıfırdan başlayan (transfersiz) bir koşuda ise ajan **köşeden hiç
+çıkamıyordu** (`outer=0, inner=0`, 2800 adımlık rastgele yürüyüş ~53 hücre
+yer değiştirme demek, hedef 1998 adım uzakta). Transfer bu yüzden opsiyonel
+değil, **gerekli** görünüyor.
+
 ---
 
 ## 12. Tek paragraf özet

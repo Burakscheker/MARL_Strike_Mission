@@ -127,15 +127,27 @@ R_SECOND_GOAL = +12.0          # ikinci ucak da vardi ("ikide olsa" bonusu)
 R_TIMEOUT = -50.0              # hicbiri varmadan sure doldu
 #
 # KAPI 2 — INTIHAR. Kapi 1'i kapatmak yenisini aciyor: umudu kesen ajan icin
-# artik EN UCUZ cikis kasten bir ic halkaya ucup episode'u erken bitirmek
-# olur. Eski degerlerle: 2*R_DEATH + R_ALL_DEAD = -40, timeout ise -50 —
-# yani intihar 10 puan KÂRLI. "Ikisi de olur ve hicbiri varmaz" sonucu en az
-# timeout kadar kotu olmali:
-#     2*(-15) + (-25) = -55  <  -50   -> intihar artik kârli degil
-# (Ilerlerken olmek serbest ve olmali: shaping yol boyunca zaten toplanmis
-# oluyor, yani "deneyip yolda olen" ajan "hic denemeyen"den cok daha iyi
-# puan aliyor. Cezalandirdigimiz sey KASTEN erken bitirmek.)
-R_ALL_DEAD = -25.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
+# artik EN UCUZ cikis kasten bir ic halkaya ucup episode'u erken bitirmek olur.
+#
+# ILK DENEMEM YANLISTI ve ajan bunu 600 episode'da BULDU. "2*R_DEATH +
+# R_ALL_DEAD <= R_TIMEOUT" yazmistim (-55 <= -50) ve kapali sandim; ADIM
+# MALIYETINI hesaba katmamistim. Erken olen ajan kalan adimlarin maliyetinden
+# de KURTULUYOR — 2800 adimlik bir episode'da bu -28 puan.
+# OLCULDU (ayni harita, scripted politikalar):
+#     INTIHAR  getiri -53.85 (267 adim, 2 olu)
+#     OYALAN   getiri -77.92 (2800 adim, timeout)
+#   -> intihar 24 puan KARLI. Egitimde de tam bu gorundu: adim ortalamasi
+#      2529'dan 446'ya dustu, olum 2.00'a cikti, basari %0'da kaldi.
+#
+# DOGRU esitsizlik adim maliyetini icerir (en kotu durum: t=0'da olmek):
+#     2*R_DEATH + R_ALL_DEAD  <=  R_TIMEOUT + MAX_STEPS * R_STEP
+#     2*(-15) + (-50) = -80   <=  -50 + (-28) = -78        -> KAPALI
+#
+# Ilerlerken olmek yine serbest: shaping yol boyunca toplandigi icin
+# ("deneyip yolda olen" ~ +120*ilerleme) haritayi kat eden ajan hic
+# denemeyenden cok daha yuksek puan alir. Cezalandirilan sey KASTEN erken
+# bitirmek.
+R_ALL_DEAD = -50.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 
 # Adim basi risk maliyeti = R_RISK_COEF * p_death(hucre). Seyrek/gurultulu
 # olum sinyalini yogun/deterministik hale getirir. 0.0 -> kapali.

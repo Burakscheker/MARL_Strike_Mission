@@ -97,6 +97,12 @@ def rollout(env, agent, algo: str, map_seed: int) -> dict:
 def evaluate_maps(n_maps: int, agent=None, algo: str | None = None,
                   seed: int = 12345) -> dict:
     env = StrikeMissionEnv(seed=seed, radar_random=True, n_radar=C.N_RADAR)
+    # ROTA ORTAMI: zar kapali, ucak olmez. Ajanin NIYET ETTIGI tam rotayi
+    # gormek icin (bkz. StrikeMissionEnv.death_enabled). Bunsuz surv_ratio
+    # yarida olen politikalarda SISIYOR: kisa yol = "guvenli" yol.
+    route_env = (StrikeMissionEnv(seed=seed, radar_random=True,
+                                  n_radar=C.N_RADAR, death_enabled=False)
+                 if agent is not None else None)
     rng = np.random.default_rng(seed)
     rows = []
 
@@ -123,18 +129,28 @@ def evaluate_maps(n_maps: int, agent=None, algo: str | None = None,
 
         if agent is not None:
             info = rollout(env, agent, algo, ms)
-            a_surv = max(info["surv1"], info["surv2"])
+            # Zar KAPALI kosu: ajanin niyet ettigi tam rota.
+            rinfo = rollout(route_env, agent, algo, ms)
+            # mission_prob = "bu rotayla gorevi GERCEKTEN tamamlama olasiligi".
+            # Hedefe varmayan rota 0 alir — hic hareket etmeyip surv=1.0
+            # toplamak boylece imkansiz.
+            m1 = rinfo["surv1"] if rinfo["reached1"] else 0.0
+            m2 = rinfo["surv2"] if rinfo["reached2"] else 0.0
+            mission = 1.0 - (1.0 - m1) * (1.0 - m2)      # >=1 ucak tamamlar
             row.update({
-                "agent_surv_best": a_surv,
-                "agent_surv_team": info["analytic_surv_team"],
+                "agent_surv_best": max(info["surv1"], info["surv2"]),
                 "team_success": float(info["team_success"]),
                 "n_dead": float(info["n_dead"]),
                 "steps": float(info["steps"]),
                 "timeout": float(info["timeout"]),
                 "route_overlap": float(info["route_overlap"]),
-                # ASIL METRIK. Oracle 0 ise (harita gercekten cozumsuz)
-                # tanimsiz — o haritalar ortalamaya KATILMAZ.
-                "surv_ratio": (a_surv / s_orc) if s_orc > 1e-12 else np.nan,
+                "route_reached": float(rinfo["reached1"] or rinfo["reached2"]),
+                "route_steps": float(rinfo["steps"]),
+                "mission_prob": mission,
+                # ASIL METRIK: rotanin gorev tamamlama olasiligi / oracle'inki.
+                # Oracle 0 ise (harita gercekten cozumsuz) tanimsiz — o
+                # haritalar ortalamaya KATILMAZ.
+                "surv_ratio": (max(m1, m2) / s_orc) if s_orc > 1e-12 else np.nan,
             })
         rows.append(row)
         if (i + 1) % 20 == 0:
@@ -164,20 +180,29 @@ def summarize(rows: list, has_agent: bool) -> str:
         out.append(f"{name:<26}{v.mean():>15.4f}{np.median(v):>10.4f}")
 
     if has_agent:
-        v = col("agent_surv_best")
-        out.append(f"{'AJAN (en iyi ucak)':<26}{v.mean():>15.4f}"
+        v = col("mission_prob")
+        out.append(f"{'AJAN (rota, zar kapali)':<26}{v.mean():>15.4f}"
                    f"{np.median(v):>10.4f}")
         out.append("")
+        out.append(f"rotasi hedefe VARIYOR: %{100*col('route_reached').mean():.1f} "
+                   f"({int(col('route_reached').sum())}/{len(rows)} harita)   "
+                   f"rota uzunlugu {col('route_steps').mean():.0f} adim")
         sr = col("surv_ratio")
         sr = sr[np.isfinite(sr)]
-        out.append(f"*** surv_ratio (ajan/oracle): ort {sr.mean():.4f}  "
+        out.append(f"*** surv_ratio (rota/oracle): ort {sr.mean():.4f}  "
                    f"medyan {np.median(sr):.4f}  (1.0 = mukemmel) ***")
+        out.append("")
+        out.append("-- zar ACIK kosu (gercek episode) --")
         out.append(f"takim basarisi (>=1 vardi): %{100*col('team_success').mean():.1f}"
                    f"   oracle tavani %{100*(1-(1-col('oracle_surv'))**2).mean():.1f}")
         out.append(f"olu ucak/episode {col('n_dead').mean():.2f}   "
                    f"timeout %{100*col('timeout').mean():.1f}   "
                    f"adim {col('steps').mean():.0f}   "
                    f"yol ortusme {col('route_overlap').mean():.3f}")
+        out.append(f"NOT: 'agent_surv_best' ({col('agent_surv_best').mean():.4f}) "
+                   f"GIDILEN yolu olcer ve yarida olen politikalarda SISER "
+                   f"(kisa yol = guvenli gorunur) — karsilastirma icin "
+                   f"mission_prob kullan.")
     return "\n".join(out)
 
 

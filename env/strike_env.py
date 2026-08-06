@@ -53,7 +53,8 @@ class StrikeMissionEnv:
                  risk_shaping: bool = True,
                  hazard_mode: str = HAZARD_MODE,
                  radar_random: bool = RADAR_RANDOM,
-                 n_radar: int = N_RADAR):
+                 n_radar: int = N_RADAR,
+                 death_enabled: bool = True):
         self.n = n
         self.max_steps = max_steps
         self.alert_enabled = alert_enabled
@@ -61,6 +62,15 @@ class StrikeMissionEnv:
         self.hazard_mode = hazard_mode
         self.radar_random = radar_random
         self.n_radar = n_radar
+        # death_enabled=False: zar ATILMAZ, ucak olmez. SADECE OLCUM icin.
+        # Gerekce (metrik butunlugu): survival_prob GIDILEN yolu olcer, o
+        # yuzden yarida olen/timeout yiyen bir ajanin yolu KISA kalir ve
+        # "guvenli" gorunur — uc noktada hic hareket etmeyen ajan surv=1.000
+        # alir. Olculdu: egitilmis ajan koseden cikamadan olurken surv=0.800
+        # raporlaniyordu. Zar kapaliyken ajanin NIYET ETTIGI tam rota
+        # gozlenir ve analitik hayatta kalma O rota uzerinden hesaplanir:
+        # gurultusuz, ve "erken ol = guvenli gorun" numarasi kapali.
+        self.death_enabled = death_enabled
         self.rng = np.random.default_rng(seed)
 
         self.p_death = np.asarray(P_DEATH, dtype=np.float64)
@@ -370,7 +380,7 @@ class StrikeMissionEnv:
                     cost = R_RISK_COEF * p       # beklenen olum maliyetini pesin ode
                     r_team -= cost
                     r_ind[agent] -= cost
-                if self.rng.random() < p:
+                if self.death_enabled and self.rng.random() < p:
                     self.alive[agent] = False
                     self.death_step[agent] = self.t
                     newly_dead.append(agent)

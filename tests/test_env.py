@@ -376,10 +376,17 @@ def test_reward_hacking_gates():
 
     # KAPI 2 — intihar: kasten olup episode'u erken bitirmek, timeout'tan
     # ucuz olmamali. Kapi 1'i kapatmak bu kapiyi ACIYOR, ikisi birlikte tutulur.
+    #
+    # ADIM MALIYETI SART. Bu testin ilk hali `all_dead <= R_TIMEOUT` diyordu
+    # ve aciği KACIRDI: erken olen ajan kalan adimlarin maliyetinden de
+    # kurtuluyor (2800 adim x -0.01 = -28 puan). Egitim bunu buldu — adim
+    # ortalamasi 2529'dan 446'ya dustu, olum 2.00'a cikti. Olculdu: intihar
+    # -53.85, oyalanma -77.92, yani 24 puan karli.
     all_dead = 2 * C.R_DEATH + C.R_ALL_DEAD
-    check("intihar timeout'tan karli DEGIL",
-          all_dead <= C.R_TIMEOUT,
-          f"ikisi de olur={all_dead} <= timeout={C.R_TIMEOUT}")
+    timeout_total = C.R_TIMEOUT + C.MAX_STEPS * C.R_STEP
+    check("intihar timeout'tan karli DEGIL (adim maliyeti DAHIL)",
+          all_dead <= timeout_total,
+          f"ikisi de olur={all_dead} <= timeout+adim={timeout_total}")
 
     # KAPI 3 — shaping farmlama: potential-based shaping teleskopik oldugu icin
     # KAPALI bir dongude net katkisi ~0 olmali (Ng ve ark. 1999). Ajan ileri
