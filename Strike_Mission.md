@@ -1235,6 +1235,54 @@ değil, **gerekli** görünüyor.
 
 ---
 
+### 11.12 📌 Teşhis: sorun ödülde DEĞİL, öğrenmede
+
+`R_RISK_COEF = 15` ile 600 episode (`vdn_v2`). Sonuç, dört ölçümle net:
+
+**1. Risk kaçınmayı ÖĞRENMİŞ** — rotası oracle kadar güvenli:
+
+| | dış giriş | iç giriş | analitik hayatta kalma | adım |
+|---|---:|---:|---:|---:|
+| oracle | 1.2 | 0.8 | 0.315 | 2039 |
+| **ajan** | **0.8** | **0.9** | **0.280** | 2800 |
+
+Ajanın rotası oracle tavanının **%89'u** kadar güvenli. İç halka maruziyeti
+36 adıma düştü (önceki koşuda 150+). `R_RISK_COEF` düzeltmesi çalıştı.
+
+**2. Ama hedefe HİÇ varmıyor** — 20/20 haritada timeout, mesafenin sadece
+**%27.5**'ini kapatıyor.
+
+**3. Takılıyor, dolaşmıyor.** Yolunun sadece **%17'si eşsiz hücre** (aynı
+yerlerde ~6 kez dönüyor) ve her haritada `Φ_son = Φ_max` — yani hedefe doğru
+düzgün ilerliyor, bir noktada duruyor, orada sonsuza kadar salınıyor.
+
+**4. Takıldığı noktada ödül "GİT" diyor.** Tek adımlık ödül:
+
+```
+GEÇMEK  +0.022        KALMAK  -0.018
+```
+
+Üstelik takıldığı hücre de gitmesi gereken komşu da **zone 1** — yeni bir
+bölgeye girmesi gerekmiyor, risk cezası yok, sadece serbest bir adım.
+
+> ### Sonuç: **reward shaping bu sorunu çözmez.**
+> Ödül fonksiyonu doğru sinyali veriyor ve ajan onu takip etmiyor. Bu bir
+> kalibrasyon değil, bir **optimizasyon** problemi: 600 episode bu ölçekte
+> (2800 adımlık ufuk, 1998 adımlık optimal yol) Q fonksiyonunu o bölgede
+> şekillendirmeye yetmiyor. Ödülü değiştirmek, doğru olan bir şeyi bozmak
+> olur.
+
+**Gerçek darboğaz — kredi ataması.** Hedef 1998 adım uzakta, `γ=0.9998`
+ile etkin ufuk 5000 adım; ama ajanın bir episode'da aldığı ~350 güncelleme
+ve toplam 600 episode, değerin haritanın uzak ucundan başlangıca
+yayılmasına yetmiyor. Ajan "yakındaki riski" öğreniyor (yoğun, yerel sinyal)
+ama "uzaktaki hedefi" öğrenemiyor (uzak, sadece shaping üzerinden gelen).
+
+Ölçüm araçları repoda: `eval/diagnose.py` (giriş sayısı + güvenlik
+karşılaştırması), `eval/stall_check.py` (takılma noktasında ödül ne diyor).
+
+---
+
 ## 12. Tek paragraf özet
 
 > **Not (2026-08-06):** Bu özetin ilk hali `STEP_SIZE=20` ile 51x51 latise

@@ -239,6 +239,27 @@ def exposure(path, zone: np.ndarray | None = None) -> tuple[int, int]:
 _STEP_DIRS = (("up", -1, 0), ("right", 0, 1), ("down", 1, 0), ("left", 0, -1))
 
 
+def entries(path, zone: np.ndarray | None = None, prev0: int = 0) -> tuple[int, int]:
+    """(dis_halka_girisi, ic_halka_girisi) — per_entry'de ZAR SAYISI.
+
+    "Kac adim bolgede kaldi" (exposure) DEGIL, "kac kez ayri bir bolgeye
+    girdi". per_entry modunda hayatta kalma tam olarak
+    0.8^(dis giris) * 0.1^(ic giris) oldugu icin ogrenilmesi gereken beceri
+    budur; reward shaping tartismasinin dogru olcusu de bu.
+    """
+    z = zone_map() if zone is None else zone
+    prev, out, inn = prev0, 0, 0
+    for r, c in path:
+        cur = int(z[r, c])
+        if cur > prev:
+            if cur == 2:
+                inn += 1
+            else:
+                out += 1
+        prev = cur
+    return out, inn
+
+
 def greedy_path(start=(0, 0), goal=GOAL, dmap: np.ndarray | None = None,
                 cost: dict | None = None,
                 max_steps: int = 20_000) -> list[tuple[int, int]]:
