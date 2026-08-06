@@ -26,10 +26,34 @@ DIRS = ((-1, 0), (0, 1), (1, 0), (0, -1))
 START = (0, 0)                 # B  (-500, +500) sol ust
 GOAL = (GRID_N - 1, GRID_N - 1)  # H  (+500, -500) sag alt
 
-# Radar merkezleri (row, col) — Burak'in verdigi (x,y)'lerden turetildi.
-# R1 (-280,220) R2 (200,100) R3 (-100,-280)
+# SABIT harita (Asama 1-10 regresyonu icin duruyor). Merkezler (row, col),
+# Burak'in verdigi (x,y)'lerden turetildi: R1 (-280,220) R2 (200,100) R3 (-100,-280)
 RADARS = ((280, 220), (400, 700), (780, 400))
-N_RADAR = len(RADARS)
+
+# RASTGELE HARITA (Asama 11, Burak 2026-08-06): "her episode farkli bi haritada
+# olsun trainde de testde de", 40 radar, merkezler uniform, CAKISMA SERBEST
+# ("merkezleri arasinda 5 fark olabilir, ustuste biner alanlari").
+RADAR_RANDOM = True
+N_RADAR = 40
+
+# Curriculum: erken egitimde seyrek harita (bol pozitif ornek), sonra yogun.
+# Olculdu (baselines/scan_random_maps): 10 radarda oracle tavani %92.5 ve
+# medyan %100; 40 radarda ortalama %32 / medyan %7.2. 40'ta SIFIRDAN baslamak
+# neredeyse hic basarili episode gormemek demek.
+CURRICULUM_RADAR_START = 10
+CURRICULUM_RADAR_END = 40
+CURRICULUM_FRAC = 0.6          # egitimin bu kesrinde END'e ulasir
+
+# DEGERLENDIRME her zaman N_RADAR'da ve SABIT tohumlu ORTAK harita setinde.
+# Egitim haritalari bu tohumlardan uretilmez (bkz. asagidaki ayrim kurali) —
+# ezberlenecek bir sey olmamasi icin sart.
+EVAL_N_MAPS = 100
+EVAL_SEED_BASE = 900_000_000   # egitim tohumlari 0..1e8 araliginda kalir
+TRAIN_SEED_MAX = 100_000_000
+
+# Risk-mesafe haritasi fast-sweeping tur ustu siniri. Yogun/dolambacli
+# haritalar 40'a sigmiyor (olculdu), 120 bol tampon.
+MAP_MAX_ITER = 120
 
 # Halka yariciplari (hucre). 220x220 -> +-110, 140x140 -> +-70.
 # |d| <= HALF kullaniliyor: kenar 2*HALF+1 = 221 / 141 hucre. Nominal 220/140
@@ -90,8 +114,28 @@ R_STEP = -0.01                 # 1998 adim -> toplam -20
 R_DEATH = -15.0                # bir ucak dusuruldu
 R_FIRST_GOAL = +50.0           # ILK ucak hedefe vardi -> takim odulu FULL
 R_SECOND_GOAL = +12.0          # ikinci ucak da vardi ("ikide olsa" bonusu)
-R_ALL_DEAD = -10.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
-R_TIMEOUT = -10.0              # hicbiri varmadan sure doldu
+
+# --- ODUL HACKLEME KAPILARI (Strike_Mission.md §11.8) ---------------------
+# Asagidaki iki deger BIRLIKTE ayarlanir; tek basina degistirmek bir acik
+# acar. Rastgele haritada tavan dustugu icin (medyan oracle %7.2) ajanin
+# "hic denememek" ve "hemen olmek" gibi dejenere cikislari kârli hale
+# gelebiliyor. Kapatilmasi gereken iki kapi:
+#
+# KAPI 1 — OYALANMA. R_TIMEOUT -10 iken guvenli bir kosede dolanip sureyi
+# doldurmak, ucup olmekten UCUZDU (olculdu: oyalanmak -38, ucmak -65).
+# Ajan "hic deneme" ogrenirdi. -50'ye cekildi.
+R_TIMEOUT = -50.0              # hicbiri varmadan sure doldu
+#
+# KAPI 2 — INTIHAR. Kapi 1'i kapatmak yenisini aciyor: umudu kesen ajan icin
+# artik EN UCUZ cikis kasten bir ic halkaya ucup episode'u erken bitirmek
+# olur. Eski degerlerle: 2*R_DEATH + R_ALL_DEAD = -40, timeout ise -50 —
+# yani intihar 10 puan KÂRLI. "Ikisi de olur ve hicbiri varmaz" sonucu en az
+# timeout kadar kotu olmali:
+#     2*(-15) + (-25) = -55  <  -50   -> intihar artik kârli degil
+# (Ilerlerken olmek serbest ve olmali: shaping yol boyunca zaten toplanmis
+# oluyor, yani "deneyip yolda olen" ajan "hic denemeyen"den cok daha iyi
+# puan aliyor. Cezalandirdigimiz sey KASTEN erken bitirmek.)
+R_ALL_DEAD = -25.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 
 # Adim basi risk maliyeti = R_RISK_COEF * p_death(hucre). Seyrek/gurultulu
 # olum sinyalini yogun/deterministik hale getirir. 0.0 -> kapali.
@@ -242,8 +286,14 @@ SCALAR_EMBED = 128
 
 # ---------------------------------------------------------------- yollar
 RUNS_DIR = "runs"
-RISK_CACHE = "runs/risk_dist.npy"      # Dijkstra risk-mesafe haritasi onbellegi
-ZONE_CACHE = "runs/zone_map.npy"
+# ONBELLEK RASTGELE HARITADA KAPALI OLMAK ZORUNDA. Harita her episode
+# degistigi icin onbellek "gecerliymis gibi" eski haritayi dondurur ve
+# HICBIR YERDE PATLAMAZ — ajan A haritasinda ucarken B haritasinin risk
+# haritasiyla odullendirilir. Sessiz yanlislik, en tehlikeli hata turu.
+# (Ayni tuzaga R_RISK_COEF degisiminde de dusulmustu; oradaki cozum dosya
+# adina parametreleri gomekti, burada tek dogru cozum onbellegi KAPATMAK.)
+RISK_CACHE = None if RADAR_RANDOM else "runs/risk_dist.npy"
+ZONE_CACHE = None if RADAR_RANDOM else "runs/zone_map.npy"
 
 # MARL-Pathfinding checkpoint'lerinin bulundugu klasor (--resume-from icin).
 PATHFINDING_CKPT_DIR = r"..\MARL-Pathfinding\runs\ckpt"
@@ -255,7 +305,16 @@ def summary() -> str:
     return "\n".join([
         f"grid            : {GRID_N}x{GRID_N} (1 hucre = 1 birim)",
         f"B -> H          : {START} -> {GOAL}, optimal {opt} adim, limit {MAX_STEPS}",
-        f"radarlar        : {RADARS}  dis +-{OUTER_HALF}, ic +-{INNER_HALF}",
+        (f"radarlar        : RASTGELE {N_RADAR} adet/episode (cakisma serbest), "
+         f"dis +-{OUTER_HALF}, ic +-{INNER_HALF}"
+         if RADAR_RANDOM else
+         f"radarlar        : SABIT {RADARS}  dis +-{OUTER_HALF}, ic +-{INNER_HALF}"),
+        (f"harita tohumu   : egitim 0..{TRAIN_SEED_MAX:.0e}, test "
+         f"{EVAL_SEED_BASE:.0e}+ ({EVAL_N_MAPS} harita) — KESISMEZ; "
+         f"curriculum {CURRICULUM_RADAR_START}->{CURRICULUM_RADAR_END} radar"
+         if RADAR_RANDOM else "harita tohumu   : -"),
+        f"odul hackleme   : timeout {R_TIMEOUT} < 2xolum {2*R_DEATH}; "
+        f"ikisi de olur {2*R_DEATH + R_ALL_DEAD} <= timeout {R_TIMEOUT}",
         (f"risk modeli     : per_entry — GIRIS basina tek zar, "
          f"dis %{P_OUTER_TOTAL*100:.0f}  ic %{P_INNER_TOTAL*100:.0f} "
          f"(surede birikme YOK)"

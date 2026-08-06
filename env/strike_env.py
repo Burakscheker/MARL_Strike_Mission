@@ -21,14 +21,16 @@ from typing import Optional
 
 import numpy as np
 
-from baselines.risk_oracle import risk_distance_map, zone_map
+from baselines.risk_oracle import build_risk_distance_map, build_zone_map
 from config import (AGENT_1, AGENT_2, ALERT_DECAY, ALERT_ENABLED, ALERT_MULT,
                     DIRS, GAMMA, GOAL, GRID_N, HAZARD_MODE, INNER_HALF,
-                    MAX_STEPS, NOOP, N_ACTIONS, OUTER_HALF, P_DEATH,
-                    PATCH_RADIUS, PATCH_SIZE, PATCH_STRIDE, P_INNER_TOTAL,
-                    P_OUTER_TOTAL, RADARS, R_ALL_DEAD, R_DEATH, R_FIRST_GOAL,
+                    MAP_MAX_ITER, MAX_STEPS, NOOP, N_ACTIONS, N_RADAR,
+                    OUTER_HALF, P_DEATH, PATCH_RADIUS, PATCH_SIZE,
+                    PATCH_STRIDE, P_INNER_TOTAL, P_OUTER_TOTAL, RADARS,
+                    RADAR_RANDOM, R_ALL_DEAD, R_DEATH, R_FIRST_GOAL,
                     R_RISK_COEF, R_SECOND_GOAL, R_STEP, R_TIMEOUT,
                     SHAPING_COEF, START, STATE_DIM)
+from env.sampler import sample_radars
 
 Cell = tuple[int, int]
 
@@ -49,20 +51,19 @@ class StrikeMissionEnv:
                  seed: Optional[int] = None,
                  alert_enabled: bool = ALERT_ENABLED,
                  risk_shaping: bool = True,
-                 hazard_mode: str = HAZARD_MODE):
+                 hazard_mode: str = HAZARD_MODE,
+                 radar_random: bool = RADAR_RANDOM,
+                 n_radar: int = N_RADAR):
         self.n = n
         self.max_steps = max_steps
         self.alert_enabled = alert_enabled
         self.risk_shaping = risk_shaping
         self.hazard_mode = hazard_mode
+        self.radar_random = radar_random
+        self.n_radar = n_radar
         self.rng = np.random.default_rng(seed)
 
-        # Radarlar SABIT -> bu iki harita bir kez hesaplanip onbelleklenir.
-        self.zone = zone_map()                       # (n,n) uint8
-        self.danger = DANGER_VALUE[self.zone]        # (n,n) float32
-        self.dist = risk_distance_map()              # (n,n) float32
         self.p_death = np.asarray(P_DEATH, dtype=np.float64)
-
         self.goal = GOAL
         self.start = START
         self.max_man = 2 * (n - 1)
@@ -75,17 +76,54 @@ class StrikeMissionEnv:
 
     # ------------------------------------------------------------- reset
 
-    def reset(self, seed: Optional[int] = None, config=None) -> dict[int, np.ndarray]:
+    def _build_map(self, radars) -> None:
+        """Radar setinden bolge + risk-mesafe haritalarini kur.
+
+        ONBELLEKSIZ (config.RISK_CACHE/ZONE_CACHE rastgele modda None):
+        harita her episode degistigi icin onbellek sessizce ESKI haritayi
+        dondururdu ve hicbir yerde patlamazdi.
+
+        Maliyet olculdu: ~0.33 s/harita (1000x1000 fast sweeping). Episode
+        basina tek sefer — ajan basina DEGIL.
+        """
+        self.radars = tuple(radars)
+        self.zone = build_zone_map(self.n, self.radars, OUTER_HALF, INNER_HALF)
+        self.danger = DANGER_VALUE[self.zone]
+        self.dist = build_risk_distance_map(goal=self.goal, zone=self.zone,
+                                            mode=self.hazard_mode,
+                                            max_iter=MAP_MAX_ITER)
+        self.alert = np.zeros(len(self.radars), dtype=np.int32)
+
+    def reset(self, seed: Optional[int] = None, config=None,
+              map_seed: Optional[int] = None,
+              n_radar: Optional[int] = None) -> dict[int, np.ndarray]:
         """config: (start1, start2, goal) — verilmezse config.py'nin sabitleri.
 
-        Radarlar ve B/H su an SABIT (Burak: "sonradan random yapicaz").
-        Imza simdiden config aliyor ki Asama 10'da sampler baglanirken
-        egitim dongusunun degismesi gerekmesin.
+        RASTGELE HARITA (self.radar_random): her reset() yeni radar seti ceker.
+        map_seed verilirse O harita deterministik uretilir — degerlendirmede
+        her algoritmanin AYNI haritalarda olculmesi icin sart (bkz.
+        env/sampler.eval_map_seeds). Verilmezse env'in kendi rng'sinden
+        cekilir, yani her episode taze harita: ezberlenecek havuz yok.
+
+        n_radar verilirse bu episode'un radar sayisini ezer (curriculum icin,
+        bkz. env/sampler.curriculum_n_radar).
         """
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         s1, s2, g = config if config is not None else (self.start, self.start, self.goal)
         self.goal = g
+        self.map_seed = map_seed
+
+        # Harita: goal SET EDILDIKTEN SONRA kurulmali (dist hedefe gore).
+        if self.radar_random:
+            k = self.n_radar if n_radar is None else n_radar
+            map_rng = (self.rng if map_seed is None
+                       else np.random.default_rng(map_seed))
+            self._build_map(sample_radars(k, map_rng, self.n))
+        elif not hasattr(self, "zone"):
+            self._build_map(RADARS)          # sabit harita: bir kez yeter
+        else:
+            self.alert[:] = 0
 
         # SHAPING OLCEGI — harita basina, max_man DEGIL.
         # BUG (bulundu ve duzeltildi): Phi ve gozlem skalari #11 eskiden
@@ -118,10 +156,18 @@ class StrikeMissionEnv:
         for a, p in self.pos.items():
             self._vis[a][p[0] // PATCH_STRIDE, p[1] // PATCH_STRIDE] = 1.0
 
-        # per_entry modu icin: ucagin O AN icinde bulundugu radar/bolge
-        self._prev_zone = {AGENT_1: 0, AGENT_2: 0}
+        # per_entry modu icin: ucagin O AN icinde bulundugu bolge.
+        # KALKIS ISTISNASI: 0'dan DEGIL, baslangic hucresinin GERCEK
+        # bolgesinden baslar. 40 rastgele radarla B'nin bir halkanin icinde
+        # kalma olasiligi yuksek; 0'dan baslamak "kendi ussunden kalkan ucak
+        # daha ilk adimda tespit edildi" demek olurdu. Ustelik maliyet modeli
+        # (direction_costs) sadece hucreler ARASI gecisleri ucretlendirdigi
+        # icin bunu hic gormuyor -> olculdu: dist(B)=1998 (tamamen guvenli
+        # yol var) olan bir haritada survival_prob 0.100 cikiyordu. Bu satir
+        # ve risk_oracle.survival_prob'daki esi o tutarsizligi kapatiyor.
+        self._prev_zone = {a: int(self.zone[self.pos[a]])
+                           for a in (AGENT_1, AGENT_2)}
 
-        self.alert = np.zeros(len(RADARS), dtype=np.int32)   # kalan alarm suresi
         self.t = 0
         self.done = False
         self._timeout = False
@@ -138,16 +184,26 @@ class StrikeMissionEnv:
         return 0 <= c[0] < self.n and 0 <= c[1] < self.n
 
     def _radar_at(self, pos: Cell) -> tuple[int, int]:
-        """(radar_index, zone) — hicbirinde degilse (-1, 0). Ic halka DIS'i ezer."""
+        """(radar_index, zone) — hicbirinde degilse (-1, 0). Ic halka DIS'i ezer.
+
+        Bolge SEVIYESI onbelleklenmis zone haritasindan O(1) okunur; radar
+        INDEKSI sadece alarm kuplaji acikken gerekli (o zaman 40 radar
+        taranir). 3 radarda dogrudan dongu ucuzdu; 40 radarda adim basi 40
+        kontrol x 2 ucak x 2800 adim = episode basina ~9M islem demekti,
+        yani ortamin kendisi agdan pahali hale gelirdi.
+        """
+        z = int(self.zone[pos])
+        if not self.alert_enabled or z == 0:
+            return -1, z
         r, c = pos
-        best = (-1, 0)
-        for i, (rr, cc) in enumerate(RADARS):
+        best = -1
+        for i, (rr, cc) in enumerate(self.radars):
             dr, dc = abs(r - rr), abs(c - cc)
-            if dr <= INNER_HALF and dc <= INNER_HALF:
+            if z == 2 and dr <= INNER_HALF and dc <= INNER_HALF:
                 return i, 2
             if dr <= OUTER_HALF and dc <= OUTER_HALF:
-                best = (i, 1)
-        return best
+                best = i
+        return best, z
 
     def physical_mask(self, agent: int) -> np.ndarray:
         """SADECE fiziksel gecerlilik (grid siniri). done/terminal durumunu

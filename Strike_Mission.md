@@ -886,35 +886,89 @@ mü söylenemez (oracle da %17.6 ise mükemmeldir).
 - [x] Doğrulandı: `Φ(B) = 0.0000`, `Φ(H) = 1.0000`, oracle yolu boyunca monoton
       artıyor; ölçüm 15 rastgele haritada tekrarlandı (§11.2 tablosu)
 
-**2. Ödül kalibrasyonu (§11.2 Sorun B)** — kısmen
+**2. Ödül kalibrasyonu (§11.2 Sorun B)** — ✅ **YAPILDI**
 - [x] `config.py`: `R_RISK_COEF = 15.0 → 7.5` (risk iki kez sayılıyordu)
 - [x] `risk_oracle.risk_distance_map` önbellek adına `risk_w` eklendi —
       `RISK_W` 1500→750 düşünce eski önbellek sessizce okunuyordu
-- [ ] `config.py`: `R_TIMEOUT = -50` (rastgele haritaya geçerken, adım 3 ile)
+- [x] `config.py`: `R_TIMEOUT = -50`, `R_ALL_DEAD = -25` (§11.8 kapıları)
 - [ ] `baselines/policies.py` ile doğrula: scripted oracle'ın episode getirisi
-      oyalanan politikadan **yüksek** çıkmalı
+      oyalanan politikadan **yüksek** çıkmalı (rastgele harita baseline'ları
+      `eval/evaluate.py` işi — ortak harita seti gerekiyor)
 
-**3. Rastgele harita altyapısı**
-- [ ] `config.py`: `N_RADAR = 40`, `RADAR_RANDOM = True`, curriculum sabitleri,
-      `RISK_CACHE = None`, `ZONE_CACHE = None`
-- [ ] `env/sampler.py`: `sample_radars(n, rng)` — üniform merkez, çakışma serbest
-- [ ] `env/strike_env.py` `reset()`: her episode yeni radar seti → `build_zone_map`
-      → `build_risk_distance_map` (onbelleksiz), `map_seed` ile deterministik
-- [ ] `_prev_zone`'u `zone[START]` ile başlat (kalkış istisnası, §11.3) —
-      `risk_oracle.survival_prob` da aynı şekilde `prev = z[start]`
+**3. Rastgele harita altyapısı** — ✅ **YAPILDI**
+- [x] `config.py`: `N_RADAR = 40`, `RADAR_RANDOM = True`, curriculum sabitleri,
+      `RISK_CACHE = None`, `ZONE_CACHE = None`, `EVAL_SEED_BASE`
+- [x] `env/sampler.py`: `sample_radars` (üniform, çakışma serbest),
+      `train_map_seed` / `eval_map_seeds` (ayrık aralıklar), `curriculum_n_radar`
+- [x] `env/strike_env.py`: `_build_map()` + `reset(map_seed=…, n_radar=…)`,
+      her episode yeni radar seti, önbelleksiz
+- [x] `_prev_zone = zone[B]` (kalkış istisnası) — `survival_prob` da aynı
+- [x] `_radar_at` O(1)'e indirildi: seviye zone haritasından okunuyor, 40 radar
+      taraması sadece alarm kuplajı açıkken (yoksa episode başına ~9M işlem)
+- [x] `two_agent.py` çalıştırıcıları `reset_kwargs` alıyor; `train.py` eğitimde
+      curriculum, değerlendirme ve demo'da held-out `map_seed` kullanıyor
 
-**4. Ölçüm**
-- [ ] `eval/evaluate.py`: `surv_ratio` + sabit seed'li **ortak** test harita seti
+**Ölçüldü** (smoke test): 5 reset → 5 farklı harita; harita kurma
+**0.251 s/episode** (20 000 episode için ~1.4 saat ek yük); aynı `map_seed`
+aynı haritayı veriyor; eğitim tohumu max 9.99e7 < test tohumu min 9e8.
+
+**4. Ölçüm** — sırada
+- [ ] `eval/evaluate.py`: `surv_ratio` + `eval_map_seeds()` ortak test seti
       (her algoritma AYNI 100 haritada ölçülmeli, yoksa kıyas anlamsız)
-- [ ] `viz`: harita artık episode'a özgü — yol çizimi radar setini JSON'dan okumalı
+- [ ] `viz`: yol çizimi radar setini JSON'dan okumalı (`run_demo` artık
+      `radars` + `map_seed` yazıyor, çizim tarafı henüz güncellenmedi)
 
-**5. Regresyon**
-- [ ] `tests/test_env.py`: `greedy_path` düzeltmesi sabit harita sayılarını
-      değiştirdi mi — `map_check.py` ve `policies.py` yeniden koşulup §0.3'teki
-      sayılar **güncellenmeli**
-- [ ] Yeni test: üst üste binen iki radarın alanında ölüm olasılığı **tek**
-      radardakiyle aynı olmalı (Burak'ın kuralı — toplama yok)
-- [ ] Yeni test: `Φ` satüre olmuyor (40 radarlı haritada `Φ(B) < Φ(orta) < Φ(H)`)
+**5. Regresyon** — ✅ **YAPILDI**
+- [x] `test_random_maps` — her reset farklı harita, `map_seed` determinizmi,
+      `n_radar` ezmesi, **eğitim/test tohum aralıkları kesişmiyor**, curriculum
+- [x] `test_takeoff_exception` — 30 haritanın **12'sinde B bir halkanın içinde**
+      (%40! nadir köşe durumu değil), `_prev_zone` doğru kuruluyor
+- [x] `test_reward_hacking_gates` — §11.8'deki üç kapı
+- [x] `test_phi_not_saturated` — yoğun haritada `dist(B) > max_man` (tuzak
+      gerçek) ve `dist_scale` ile Φ monoton
+- [ ] `map_check.py` / `policies.py` yeniden koşulup §0.3 sayıları güncellenmeli
+      (`greedy_path` düzeltmesi sonrası)
+
+### 11.8 🛡️ Ödül hackleme duruşu
+
+> **Burak (2026-08-06):** *"aynı zamanda reward hacking'e de karşı bi
+> duruşumuz olsun"*
+
+Rastgele haritada tavan düştüğü için (medyan oracle %7.2) ajanın **görevi
+yapmadan puan toplama** yolları kârlı hale gelebiliyor. Üç kapı tespit edildi
+ve üçü de `tests/test_reward_hacking_gates` ile **kilitlendi** — ödül
+değerleri elle değiştirilirse test patlar.
+
+| # | Açık | Nasıl sömürülürdü | Kapatan kural |
+|---|---|---|---|
+| 1 | **Oyalanma** | Güvenli köşede dolan, süreyi doldur | `R_TIMEOUT < 2·R_DEATH` → `−50 < −30` ✅ |
+| 2 | **İntihar** | Umudu kes, iç halkaya dal, episode'u erken bitir | `2·R_DEATH + R_ALL_DEAD ≤ R_TIMEOUT` → `−55 ≤ −50` ✅ |
+| 3 | **Shaping farmlama** | İleri-geri gidip shaping ödülü biriktir | Potential-based shaping teleskopik (Ng ve ark. 1999): kapalı döngüde net katkı 0 ✅ |
+
+**Kapı 2, Kapı 1'i kapatmanın YAN ÜRÜNÜ.** `R_TIMEOUT`'u −10'dan −50'ye
+çekince, umudunu kesen ajan için en ucuz çıkış kasten ölmek oluyordu (eski
+değerlerle `2×(−15) + (−10) = −40`, timeout −50 → intihar 10 puan kârlı).
+`R_ALL_DEAD = −25` bunu kapatıyor. **İkisi birlikte ayarlanır**, tek başına
+değiştirmek açık yaratır.
+
+> Not: *ilerlerken* ölmek serbest ve olmalı — shaping yol boyunca zaten
+> toplandığı için "deneyip yolda ölen" ajan "hiç denemeyen"den çok daha
+> yüksek puan alır. Cezalandırdığımız şey **kasten erken bitirmek**.
+
+**Aşırı öğrenmeye karşı duruş** (aynı madalyonun diğer yüzü — ezberlenmiş bir
+politika da "hack"tir):
+
+1. **Her episode taze harita.** Eğitimde harita tohumu env'in kendi
+   rng'sinden çekilir, sabit bir havuz yok.
+2. **Eğitim / test tohum aralıkları ayrık.** Eğitim `0 … 1e8`, test
+   `9e8 …`. Ajanın testte gördüğü bir haritayı eğitimde görme olasılığı
+   **sıfır** — testte iyi olmak genellemeden başka bir şeyle açıklanamaz.
+3. **Demo'lar da held-out.** Rapora giren yol çizimleri eğitimde
+   görülmemiş haritalardan.
+4. **Curriculum sadece eğitimde.** Değerlendirme her zaman tam 40 radarda.
+5. **Metrik hile-dayanıklı.** `surv_ratio` = ajanın seçtiği yolun analitik
+   hayatta kalma olasılığı / oracle'ınki. Zar sonucundan bağımsız, yolun
+   deterministik bir fonksiyonu — şansla iyi görünmek mümkün değil.
 
 ---
 

@@ -33,13 +33,16 @@ def _act_all(agents_or_agent, obs, env, train: bool, shared: bool):
 
 
 def play_episode(env: StrikeMissionEnv, agents: dict, train: bool,
-                 config=None) -> tuple[dict, dict]:
+                 config=None, reset_kwargs: Optional[dict] = None) -> tuple[dict, dict]:
     """IQL: iki BAGIMSIZ DQN, her biri SADECE info["r_ind"][agent]'i gorur.
 
     Takim odulu (r_team) hic kullanilmaz — IQL'in tanimi bu. Bir ucak terminal
     olduktan sonra ARTIK push etmez (kendi episode'u bitti); digeri devam eder.
     """
-    obs = env.reset(config=config)
+    # reset_kwargs: rastgele haritada map_seed / n_radar (curriculum) buradan
+    # gecer. Egitim ve degerlendirme AYNI fonksiyonu kullandigi icin harita
+    # secimi de tek yerden yonetilmis olur.
+    obs = env.reset(config=config, **(reset_kwargs or {}))
     losses = {AGENT_1: [], AGENT_2: []}
     info: dict = {}
     done = False
@@ -71,7 +74,7 @@ def play_episode(env: StrikeMissionEnv, agents: dict, train: bool,
 
 
 def play_episode_vdn(env: StrikeMissionEnv, agent, train: bool,
-                     config=None,
+                     config=None, reset_kwargs: Optional[dict] = None,
                      health_probe: Optional[list] = None) -> tuple[dict, list]:
     """VDN: Q_tot = Q_1 + Q_2, TEK TD hatasi ikisine BIRDEN geri yayilir.
 
@@ -85,7 +88,10 @@ def play_episode_vdn(env: StrikeMissionEnv, agent, train: bool,
     ucagin gozleminin guncellenmedigini gosterir — MARL-Pathfinding'de "en
     sinsi bug" buydu, burada da tek saglik kontrolu bu.
     """
-    obs = env.reset(config=config)
+    # reset_kwargs: rastgele haritada map_seed / n_radar (curriculum) buradan
+    # gecer. Egitim ve degerlendirme AYNI fonksiyonu kullandigi icin harita
+    # secimi de tek yerden yonetilmis olur.
+    obs = env.reset(config=config, **(reset_kwargs or {}))
     losses: list = []
     info: dict = {}
     done = False
@@ -119,11 +125,14 @@ def play_episode_vdn(env: StrikeMissionEnv, agent, train: bool,
 
 
 def play_episode_qmix(env: StrikeMissionEnv, agent, train: bool,
-                      config=None,
+                      config=None, reset_kwargs: Optional[dict] = None,
                       health_probe: Optional[list] = None) -> tuple[dict, list]:
     """QMIX: play_episode_vdn ile TEK fark — her joint transition'a GLOBAL
     STATE (t ve t+1) eklenir; mixer'in hypernetwork'u agirliklarini ondan uretir."""
-    obs = env.reset(config=config)
+    # reset_kwargs: rastgele haritada map_seed / n_radar (curriculum) buradan
+    # gecer. Egitim ve degerlendirme AYNI fonksiyonu kullandigi icin harita
+    # secimi de tek yerden yonetilmis olur.
+    obs = env.reset(config=config, **(reset_kwargs or {}))
     losses: list = []
     info: dict = {}
     done = False

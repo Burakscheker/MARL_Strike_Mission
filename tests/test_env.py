@@ -62,7 +62,7 @@ def test_oracle_is_safe_and_optimal():
 # --------------------------------------------------------------------- gozlem
 
 def test_dims():
-    env = StrikeMissionEnv(seed=0)
+    env = StrikeMissionEnv(seed=0, radar_random=False)
     obs = env.observations()
     check("OBS_DIM", obs[C.AGENT_1].shape == (C.OBS_DIM,), str(obs[C.AGENT_1].shape))
     check("STATE_DIM", env.state().shape == (C.STATE_DIM,), str(env.state().shape))
@@ -70,7 +70,7 @@ def test_dims():
 
 
 def test_masks():
-    env = StrikeMissionEnv(seed=0)
+    env = StrikeMissionEnv(seed=0, radar_random=False)
     # B = (0,0) sol ust kose -> YUKARI ve SOL gecersiz
     m = env.action_mask(C.AGENT_1)
     check("kosede YUKARI kapali", m[C.UP] == 0)
@@ -90,7 +90,7 @@ def test_terminal_obs_keeps_updating():
     degismek ZORUNDA — degismezse Q(obs_2, NOOP) sabit kalir ve VDN'in
     toplamsal ayristirmasi A1'e hicbir gradyan tasimaz.
     """
-    env = StrikeMissionEnv(seed=0)
+    env = StrikeMissionEnv(seed=0, radar_random=False)
     env.alive[C.AGENT_2] = False               # A2'yi terminal yap
     o0 = env.observe(C.AGENT_2).copy()
     for _ in range(60):
@@ -114,6 +114,11 @@ def _run_scripted(env, path, seed):
     # oldu, test "hic olum yok" diyordu cunku ucak radara hic girmiyordu.
     env.pos[C.AGENT_1] = tuple(path[0])
     env.path[C.AGENT_1] = [tuple(path[0])]
+    # _prev_zone da tasinmali. reset() onu ucagin O ANKI hucresinden kuruyor
+    # (kalkis istisnasi); yukaridaki isinlanmadan sonra guncellenmezse ortam
+    # "START'tan geldim" saniyor ve survival_prob ile AYRISIYOR — yolun ilk
+    # hucresi bir halkanin icindeyse ortam zar atiyor, analitik atmiyordu.
+    env._prev_zone[C.AGENT_1] = int(env.zone[tuple(path[0])])
     for (r0, c0), (r1, c1) in zip(path, path[1:]):
         dr, dc = r1 - r0, c1 - c0
         act = C.DIRS.index((dr, dc))
@@ -130,11 +135,16 @@ def test_simulation_matches_analytic(trials=400):
     analitik hayatta kalma orta seviyede olsun ki istatistik anlamli olsun.
     """
     r0, c0 = C.RADARS[0]
-    # ic halkanin ustunden altina duz dikey gecis
-    path = [(r, c0) for r in range(r0 - C.INNER_HALF, r0 + C.INNER_HALF + 1)]
+    # Ic halkanin ustunden altina duz dikey gecis. Yol ic halkanin BIR HUCRE
+    # DISINDAN baslamali (orasi dis halka, zone=1): kalkis istisnasi geregi
+    # yolun ILK hucresi "giris" sayilmiyor, tam sinirdan baslasaydik ic halkaya
+    # girmis olmaz ve analitik hayatta kalma 1.0 cikardi (testin olcmek
+    # istedigi sey tam olarak bu girisin maliyeti).
+    path = [(r, c0) for r in range(r0 - C.INNER_HALF - 1, r0 + C.INNER_HALF + 1)]
     analytic = survival_prob(path)
 
-    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False)
+    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False,
+                           radar_random=False)
     alive = sum(_run_scripted(env, path, seed=1000 + k) for k in range(trials))
     emp = alive / trials
     # 3 sigma bandi
@@ -153,7 +163,8 @@ def test_safe_path_never_dies(trials=30):
     """Oracle yolunda HIC olum olmamali (p_death=0 hucrelerden geciyor)."""
     d = risk_distance_map()
     path = greedy_path(C.START, C.GOAL, d)
-    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False)
+    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False,
+                           radar_random=False)
     deaths = sum(0 if _run_scripted(env, path, seed=2000 + k) else 1
                  for k in range(trials))
     check("guvenli yolda olum yok", deaths == 0, f"{deaths}/{trials} olum")
@@ -162,7 +173,8 @@ def test_safe_path_never_dies(trials=30):
 # --------------------------------------------------------------------- odul
 
 def test_reward_terminals():
-    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False)
+    env = StrikeMissionEnv(max_steps=10_000, seed=0, risk_shaping=False,
+                           radar_random=False)
     env.reset()
     # ikisini de hedefin bir adim yanina koy
     g = C.GOAL
@@ -181,7 +193,8 @@ def test_death_penalty(trials=200):
     r0, c0 = C.RADARS[0]
     deaths = 0
     for k in range(trials):
-        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False)
+        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False,
+                               radar_random=False)
         env.reset()
         env.pos = {C.AGENT_1: (r0, c0), C.AGENT_2: (0, 0)}
         env.step({C.AGENT_1: C.UP, C.AGENT_2: C.RIGHT})
@@ -202,7 +215,8 @@ def test_per_entry_no_accumulation():
     survived = 0
     trials = 200
     for k in range(trials):
-        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False)
+        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False,
+                               radar_random=False)
         env.reset()
         # ILK zari atlamak icin ucagi zaten "icerideymis" gibi baslat
         env.pos = {C.AGENT_1: (r0, c0), C.AGENT_2: (0, 0)}
@@ -224,7 +238,8 @@ def test_reentry_rolls_again():
     deaths = 0
     trials = 300
     for k in range(trials):
-        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False)
+        env = StrikeMissionEnv(max_steps=10_000, seed=k, risk_shaping=False,
+                               radar_random=False)
         env.reset()
         env.pos = {C.AGENT_1: (edge - 1, c0), C.AGENT_2: (0, 0)}   # disarda
         # gir (zar 1) -> cik -> gir (zar 2)
@@ -254,7 +269,7 @@ def test_phi_not_saturated():
     from baselines.risk_oracle import (RISK_W, build_risk_distance_map,
                                        build_zone_map, direction_costs)
 
-    env = StrikeMissionEnv(seed=0)
+    env = StrikeMissionEnv(seed=0, radar_random=False)
     env.pos[C.AGENT_1] = C.START
     phi_b = env._phi(C.AGENT_1)
     env.pos[C.AGENT_1] = C.GOAL
@@ -284,6 +299,105 @@ def test_phi_not_saturated():
           all(b >= a - 1e-6 for a, b in zip(phis, phis[1:])))
 
 
+# ----------------------------------------------------- rastgele harita (§11)
+
+def test_random_maps():
+    """Her episode farkli harita + degerlendirme icin determinizm."""
+    from env.sampler import (curriculum_n_radar, eval_map_seeds,
+                             train_map_seed)
+
+    env = StrikeMissionEnv(seed=0, radar_random=True, n_radar=40)
+    sets = []
+    for _ in range(5):
+        env.reset()
+        sets.append(env.radars)
+    check("her reset FARKLI harita", len({s for s in sets}) == 5,
+          f"{len({s for s in sets})}/5 essiz")
+    check("radar sayisi 40", all(len(s) == 40 for s in sets))
+
+    env.reset(map_seed=12345)
+    first = env.radars
+    env.reset(map_seed=999)
+    env.reset(map_seed=12345)
+    check("ayni map_seed -> ayni harita", env.radars == first)
+
+    env.reset(n_radar=7)
+    check("n_radar ezmesi (curriculum) calisiyor", len(env.radars) == 7,
+          str(len(env.radars)))
+
+    # ASIRI OGRENME SAVUNMASI: egitim ve test haritalari AYNI tohumdan
+    # uretilemez. Kesisirse "test basarisi" ezber olabilir ve sayi anlamsizlasir.
+    import numpy as np
+    rng = np.random.default_rng(0)
+    tr_max = max(train_map_seed(rng) for _ in range(2000))
+    check("egitim/test harita tohumlari KESISMIYOR",
+          tr_max < min(eval_map_seeds()),
+          f"egitim max={tr_max} < test min={min(eval_map_seeds())}")
+    check("curriculum rampasi 10 -> 40",
+          curriculum_n_radar(1, 10_000) == 10
+          and curriculum_n_radar(10_000, 10_000) == 40)
+
+
+def test_takeoff_exception():
+    """B bir halkanin ICINDEYSE kalkista zar atilmamali.
+
+    40 rastgele radarla bu nadir bir kose durumu DEGIL: olculdu, 30 test
+    haritasinin 12'sinde (%40) B bir halkanin icinde kaliyor. _prev_zone 0'dan
+    baslasaydi bu haritalarin hepsinde ucak daha ilk adimda zar yerdi ve
+    maliyet modeli (sadece hucreler ARASI gecisleri ucretlendiriyor) bunu hic
+    gormedigi icin ortam ile oracle sessizce ayrisirdi.
+    """
+    env = StrikeMissionEnv(seed=0, radar_random=True, n_radar=40)
+    n_inside = 0
+    for k in range(30):
+        env.reset(map_seed=C.EVAL_SEED_BASE + k)
+        z0 = int(env.zone[C.START])
+        if z0 > 0:
+            n_inside += 1
+        if env._prev_zone[C.AGENT_1] != z0:
+            check("kalkis istisnasi: _prev_zone = zone[B]", False,
+                  f"map {k}: {env._prev_zone[C.AGENT_1]} != {z0}")
+            return
+    check("kalkis istisnasi: _prev_zone = zone[B] (30 harita)", True,
+          f"{n_inside}/30 haritada B halka icinde")
+
+
+def test_reward_hacking_gates():
+    """Odul fonksiyonunun dejenere cikislari kapali mi — Strike_Mission.md §11.8.
+
+    Bu test SAYISAL degil YAPISAL: ajanin gorevi yapmadan puan toplayabilecegi
+    yollari kapatan esitsizlikleri sabitliyor. Odul degerleri elle
+    degistirilirse burada patlar.
+    """
+    # KAPI 1 — oyalanma: sureyi doldurmak, denemekten ucuz olmamali.
+    check("R_TIMEOUT olumden pahali (oyalanma kapali)",
+          C.R_TIMEOUT < 2 * C.R_DEATH,
+          f"{C.R_TIMEOUT} < {2*C.R_DEATH}")
+
+    # KAPI 2 — intihar: kasten olup episode'u erken bitirmek, timeout'tan
+    # ucuz olmamali. Kapi 1'i kapatmak bu kapiyi ACIYOR, ikisi birlikte tutulur.
+    all_dead = 2 * C.R_DEATH + C.R_ALL_DEAD
+    check("intihar timeout'tan karli DEGIL",
+          all_dead <= C.R_TIMEOUT,
+          f"ikisi de olur={all_dead} <= timeout={C.R_TIMEOUT}")
+
+    # KAPI 3 — shaping farmlama: potential-based shaping teleskopik oldugu icin
+    # KAPALI bir dongude net katkisi ~0 olmali (Ng ve ark. 1999). Ajan ileri
+    # geri gidip odul biriktiremez.
+    env = StrikeMissionEnv(seed=0, radar_random=False, risk_shaping=False)
+    env.reset()
+    start = env.pos[C.AGENT_1]
+    total = 0.0
+    for act in (C.RIGHT, C.DOWN, C.LEFT, C.UP):     # kapali dortgen
+        _, r, _, _ = env.step({C.AGENT_1: act, C.AGENT_2: C.NOOP})
+        total += r
+    back = env.pos[C.AGENT_1] == start
+    # Dongude kalan tek sey adim maliyeti olmali (4 adim), shaping ~0.
+    check("kapali donguden shaping karı yok",
+          back and total <= 4 * C.R_STEP + 1e-3,
+          f"dondu={back} toplam={total:.4f} (adim maliyeti={4*C.R_STEP:.3f})")
+
+
 def main():
     print("\n=== geometri ===")
     test_zone_geometry()
@@ -301,6 +415,10 @@ def main():
     test_death_penalty()
     test_per_entry_no_accumulation()
     test_reentry_rolls_again()
+    print("\n=== rastgele harita / odul hackleme ===")
+    test_random_maps()
+    test_takeoff_exception()
+    test_reward_hacking_gates()
 
     print("\n" + "=" * 60)
     if _FAILED:

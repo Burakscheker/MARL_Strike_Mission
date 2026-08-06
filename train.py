@@ -24,6 +24,7 @@ from agents import transfer
 from agents.dqn import DQNAgent
 from agents.qmix import QMixAgent
 from agents.vdn import VDNAgent
+from env.sampler import curriculum_n_radar, eval_map_seeds
 from env.strike_env import StrikeMissionEnv
 from env.two_agent import play_episode, play_episode_qmix, play_episode_vdn
 
@@ -84,12 +85,25 @@ METRIC_KEYS = ("team_success", "both_reached", "n_dead", "timeout", "steps",
 
 
 def evaluate(env, agent, algo: str, episodes: int, seed: int = 12345) -> dict:
-    """DETERMINISTIK (eps=0) degerlendirme. Egitimle AYNI runner kullanilir."""
+    """DETERMINISTIK (eps=0) degerlendirme. Egitimle AYNI runner kullanilir.
+
+    RASTGELE HARITADA (env.radar_random): haritalar env/sampler.eval_map_seeds()
+    tohumlarindan uretilir. Iki sart birden saglanir:
+      1. Tohum araligi egitiminkiyle KESISMEZ (TRAIN_SEED_MAX < EVAL_SEED_BASE)
+         -> ajan bu haritalari egitimde HIC gormedi, ezberlemis olamaz.
+      2. Tohumlar SABIT -> IQL/VDN/QMIX ve tum baseline'lar AYNI haritalarda
+         olculur. Rastgele haritada tavan harita sansiyla 10 kat oynadigi icin
+         (oracle ortalama %32, medyan %7.2) bu olmadan algoritmalar arasi fark
+         yorumlanamaz.
+    Curriculum burada UYGULANMAZ: degerlendirme her zaman tam N_RADAR'da.
+    """
     runner = RUNNER[algo]
     env.rng = np.random.default_rng(seed)      # olum zarlari icin sabit tohum
     acc = {k: 0.0 for k in METRIC_KEYS}
-    for _ in range(episodes):
-        info, _ = runner(env, agent, train=False)
+    seeds = eval_map_seeds(episodes) if env.radar_random else [None] * episodes
+    for s in seeds:
+        rk = {"map_seed": s, "n_radar": C.N_RADAR} if env.radar_random else None
+        info, _ = runner(env, agent, train=False, reset_kwargs=rk)
         for k in METRIC_KEYS:
             acc[k] += float(info[k])
     return {k: v / episodes for k, v in acc.items()}
@@ -181,7 +195,13 @@ def main():
 
     for ep in range(1, episodes + 1):
         set_eps(agent, algo, min(1.0, ep / floor))
-        info, losses = runner(env, agent, train=True)
+        # Curriculum: radar sayisi 10 -> 40 rampalanir (bkz. sampler). Harita
+        # tohumu VERILMEZ -> env kendi rng'sinden ceker, yani her episode taze
+        # harita. Ezberlenecek sabit havuz yok; asiri ogrenmeye karsi asil
+        # savunma bu (degerlendirme tohumlariyla da kesismiyor).
+        rk = ({"n_radar": curriculum_n_radar(ep, episodes)}
+              if env.radar_random else None)
+        info, losses = runner(env, agent, train=True, reset_kwargs=rk)
 
         ep_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
                        int(info["team_success"]),
@@ -244,11 +264,20 @@ def run_demo(env, agent, algo: str, episodes: int, tag: str) -> str:
     runner = RUNNER[algo]
     out = []
     print(f"\n--- {episodes} deterministik gosterim episode'u (eps=0) ---")
+    # Gosterim de HELD-OUT haritalarda: egitimde gorulmemis tohumlar.
+    # Rapora giren yol cizimlerinin "ezberlenmis harita" olmadigi boyle garanti.
+    seeds = eval_map_seeds(episodes) if env.radar_random else [None] * episodes
     for i in range(episodes):
         env.rng = np.random.default_rng(C.DEMO_SEED + i)
-        info, _ = runner(env, agent, train=False)
+        rk = ({"map_seed": seeds[i], "n_radar": C.N_RADAR}
+              if env.radar_random else None)
+        info, _ = runner(env, agent, train=False, reset_kwargs=rk)
         out.append({
             "episode": i,
+            # Harita artik episode'a ozgu -> radar seti de kaydedilmeli,
+            # yoksa viz yolu YANLIS haritanin uzerine cizer.
+            "map_seed": seeds[i],
+            "radars": [list(r) for r in env.radars],
             "team_success": bool(info["team_success"]),
             "both_reached": bool(info["both_reached"]),
             "reached1": bool(info["reached1"]), "reached2": bool(info["reached2"]),

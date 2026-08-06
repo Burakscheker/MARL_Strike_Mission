@@ -64,7 +64,11 @@ class RandomMonotonePolicy:
 
 def run(policy, episodes=20, seed=0, alert=False):
     from env.two_agent import play_episode_vdn
-    env = StrikeMissionEnv(seed=seed, alert_enabled=alert)
+    # SABIT harita: bu betik §0.3'teki referans sayilari (merdiven / L yolu /
+    # oracle / rastgele monoton) yeniden uretiyor, onlar sabit haritaya ait.
+    # Rastgele haritadaki baseline'lar eval/evaluate.py'nin isi (ortak harita
+    # seti gerekiyor, bkz. env/sampler.eval_map_seeds).
+    env = StrikeMissionEnv(seed=seed, alert_enabled=alert, radar_random=False)
     acc = {}
     for i in range(episodes):
         env.rng = np.random.default_rng(10_000 + i)
