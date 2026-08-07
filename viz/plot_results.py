@@ -65,7 +65,9 @@ def fig1():
              "ham takim basarisi — ayni kosular, ayri sonuc")):
         means, allpts = [], []
         for a in ALGOS:
-            per_seed = [np.nanmean(col(load_eval(s, a), key)) for s in SEEDS]
+            # YUZDE olarak: her iki metrik de 0..1 arasi bir oran
+            # (surv_ratio = ajan/oracle, team_success = varan episode orani).
+            per_seed = [100 * np.nanmean(col(load_eval(s, a), key)) for s in SEEDS]
             means.append(np.mean(per_seed))
             allpts.append(per_seed)
         x = np.arange(len(ALGOS))
@@ -77,7 +79,15 @@ def fig1():
                     mfc="none", mew=1.3, zorder=5)
         ax.set_xticks(x)
         ax.set_xticklabels([a.upper() for a in ALGOS], fontsize=10)
-        _style(ax, title, "", "ortalama")
+        # Etiket, hata cubugunun VE tohum noktalarinin ustune —
+        # cubugun tepesine koyunca beyaz hata cizgisiyle ust uste biniyordu.
+        top = max(max(pts + [np.mean(pts) + np.std(pts)]) for pts in allpts)
+        for i, (v, pts) in enumerate(zip(means, allpts)):
+            hi = max(max(pts), np.mean(pts) + np.std(pts))
+            ax.text(i, hi + top * 0.045, f"%{v:.2f}", ha="center", va="bottom",
+                    fontsize=10, color="white", weight="bold")
+        ax.set_ylim(0, top * 1.30)
+        _style(ax, title, "", "ortalama (%)")
 
     axes[0].text(0.98, 0.95, "VDN 3/3 tohumda kazandi\neslestirilmis p=0.001",
                  transform=axes[0].transAxes, ha="right", va="top",
@@ -99,7 +109,8 @@ def fig1():
 def fig2():
     per = {}
     for a in ALGOS:
-        per[a] = np.nanmean(
+        # YUZDE (surv_ratio 0..1 bir oran); tohumlar harita basina ortalanir
+        per[a] = 100 * np.nanmean(
             np.vstack([col(load_eval(s, a), "surv_ratio") for s in SEEDS]), axis=0)
 
     fig, ax = plt.subplots(figsize=(6.2, 6))
@@ -113,10 +124,10 @@ def fig2():
     ax.fill_between([0, lim], [0, lim], [lim, lim], color="#3ddc97", alpha=0.06)
     wins = int((per["vdn"][m] > per["iql"][m]).sum())
     tot = int((per["vdn"][m] != per["iql"][m]).sum())
-    ax.set_xlim(-0.005, lim); ax.set_ylim(-0.005, lim)
+    ax.set_xlim(-0.5, lim); ax.set_ylim(-0.5, lim)
     _style(ax, f"Harita basina surv_ratio — VDN {wins}/{tot} haritada ustun\n"
                f"(Wilcoxon p=0.001, ayni haritalar -> zorluk varyansi disarida)",
-           "IQL", "VDN")
+           "IQL  surv_ratio (%)", "VDN  surv_ratio (%)")
     ax.legend(fontsize=8, framealpha=0.2, loc="lower right")
     fig.tight_layout()
     p = os.path.join(OUT, "fig2_paired.png")
