@@ -188,7 +188,35 @@ def main():
     dense_f = open(dense_path, "w", newline="", encoding="utf-8")
     dense_w = csv.writer(dense_f)
     dense_w.writerow(["episode", "eps", "team_success_ma", "n_dead_ma",
-                      "inner_ma", "steps_ma", "loss_ma"])
+                      "inner_ma", "steps_ma", "loss_ma", "q_mean", "q_gap"])
+
+    # Q OLCEK PROBU (§11.14). Uzun egitimde VDN'in Q'su 17.5 -> 37.6 (2 kat)
+    # cikarken AKSIYON BOSLUGU 0.103 -> 0.058'e (yariya) dustu; QMIX'te bosluk
+    # bastan 0.0016 (VDN'in 60'ta biri), yani ag aksiyonlari AYIRT EDEMIYOR.
+    # Politika argmax Q oldugu icin bozulan sey tam olarak budur. Bu yuzden
+    # egitim boyunca iki sayi loglanir:
+    #   q_mean = ortalama Q  (sisme)
+    #   q_gap  = en iyi ile ikinci arasindaki fark (ayirt etme gucu)
+    # SABIT bir gozlem kumesinde olculur — yoksa "kotu politika kotu durumlara
+    # gider, oradaki Q farklidir" diye bir karistirici girer.
+    _probe = []
+    _penv = StrikeMissionEnv(max_steps=args.max_steps, seed=999,
+                             radar_random=env.radar_random, n_radar=C.N_RADAR)
+    _o = _penv.reset(map_seed=C.EVAL_SEED_BASE - 1, n_radar=C.N_RADAR)
+    for _ in range(64):
+        _probe.append(_o[C.AGENT_1])
+        _o, _, _d, _ = _penv.step({C.AGENT_1: C.RIGHT, C.AGENT_2: C.DOWN})
+        if _d:
+            break
+    import torch as _torch
+    PROBE = _torch.as_tensor(np.asarray(_probe, dtype=np.float32))
+
+    def q_stats():
+        net = (agent[C.AGENT_1].online if algo == "iql" else agent.online[C.AGENT_1])
+        with _torch.no_grad():
+            q = net(PROBE)[:, :4]
+        t2 = q.topk(2, dim=1).values
+        return float(q.mean()), float((t2[:, 0] - t2[:, 1]).mean())
     # EPISODE BASINA ham kayit — grafikte hem ham nokta hem hareketli ortalama
     # cizilebilsin diye. Sadece hareketli ortalama loglamak, gurultunun ne kadar
     # oldugunu gizler; sadece hami loglamak da egilimi gostermez.
@@ -243,7 +271,8 @@ def main():
             dense_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
                               f"{np.mean(ma['team']):.4f}", f"{np.mean(ma['dead']):.4f}",
                               f"{np.mean(ma['inner']):.1f}", f"{np.mean(ma['steps']):.1f}",
-                              f"{np.mean(ma['loss']) if ma['loss'] else 0:.5f}"])
+                              f"{np.mean(ma['loss']) if ma['loss'] else 0:.5f}",
+                              *(f"{v:.4f}" for v in q_stats())])
             dense_f.flush()
             ep_f.flush()      # yoksa episode CSV'si ancak kosu bitince yazilir
                               # ve uzun kosularda ilerleme hic gorunmez
