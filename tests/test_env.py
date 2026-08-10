@@ -431,7 +431,7 @@ def test_reward_hacking_gates():
         total += r
     back = env.pos[C.AGENT_1] == start
     # Dongude kalan tek sey adim maliyeti olmali (4 adim), shaping ~0.
-    check("kapali donguden shaping karı yok",
+    check("kapali donguden shaping kari yok",
           back and total <= 4 * C.R_STEP + 1e-3,
           f"dondu={back} toplam={total:.4f} (adim maliyeti={4*C.R_STEP:.3f})")
 

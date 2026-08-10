@@ -26,7 +26,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from agents.networks import build_qnet, masked_q
-from config import (HUBER_BETA, AGENT_1, AGENT_2, CNN_CHANNELS, EPS_END, EPS_START,
+from agents.nstep import SPEC_QMIX, NStepAccumulator
+from config import (HUBER_BETA, N_STEP, AGENT_1, AGENT_2, CNN_CHANNELS, EPS_END, EPS_START,
                     GAMMA, GRAD_CLIP, LEARN_EVERY, N_ACTIONS, OBS_DIM,
                     PATCH_SIZE, QMIX_BATCH, QMIX_BUFFER, QMIX_EPS_DECAY_STEPS,
                     QMIX_LEARN_START, QMIX_LR, QMIX_MIXER_EMBED,
@@ -54,6 +55,8 @@ class MixerReplayBuffer:
         self.state = np.zeros((capacity, state_dim), dtype=np.float32)
         self.next_state = np.zeros((capacity, state_dim), dtype=np.float32)
         self.done = np.zeros(capacity, dtype=np.float32)
+        # n-adim ufku (bkz. agents/nstep.py)
+        self.gamma_n = np.zeros(capacity, dtype=np.float32)
         self._i = 0
         self._full = False
 
@@ -61,13 +64,14 @@ class MixerReplayBuffer:
         return self.capacity if self._full else self._i
 
     def push(self, obs1, a1, obs2, a2, reward, next_obs1, next_obs2, done,
-             next_mask1, next_mask2, state, next_state):
+             next_mask1, next_mask2, state, next_state, gamma_n: float = 1.0):
         i = self._i
         self.obs1[i], self.obs2[i] = obs1, obs2
         self.action1[i], self.action2[i] = a1, a2
         self.reward[i] = reward
         self.next_obs1[i], self.next_obs2[i] = next_obs1, next_obs2
         self.done[i] = float(done)
+        self.gamma_n[i] = gamma_n
         self.next_mask1[i] = np.ones_like(next_mask1) if done else next_mask1
         self.next_mask2[i] = np.ones_like(next_mask2) if done else next_mask2
         self.state[i] = state
@@ -81,7 +85,7 @@ class MixerReplayBuffer:
         return (self.obs1[idx], self.action1[idx], self.obs2[idx], self.action2[idx],
                 self.reward[idx], self.next_obs1[idx], self.next_obs2[idx],
                 self.done[idx], self.next_mask1[idx], self.next_mask2[idx],
-                self.state[idx], self.next_state[idx])
+                self.state[idx], self.next_state[idx], self.gamma_n[idx])
 
 
 class QMixer(nn.Module):
@@ -190,6 +194,8 @@ class QMixAgent:
                  + list(self.mixer.parameters()))
         self.opt = torch.optim.Adam(params, lr=lr)
         self.buffer = MixerReplayBuffer(buffer_size, obs_dim, state_dim, n_actions, self.rng)
+        # n-ADIM GETIRI (agents/nstep.py). N_STEP=1 -> eski davranis BIREBIR.
+        self.nstep = NStepAccumulator(N_STEP, GAMMA, SPEC_QMIX)
         self.steps = 0
         self.eps_progress: float | None = None   # bkz. eps / set_eps_progress
 
@@ -225,18 +231,25 @@ class QMixAgent:
             return float(self.online[agent_id](o)[0, action].item())
 
     def push(self, *joint_transition):
-        self.buffer.push(*joint_transition)
+        for tr, gamma_n in self.nstep.push(joint_transition):
+            self.buffer.push(*tr, gamma_n=gamma_n)
         self.steps += 1
+
+    def end_episode(self):
+        """Episode sinirinda kalan kisa pencereleri bosalt (bkz. nstep.py)."""
+        for tr, gamma_n in self.nstep.flush():
+            self.buffer.push(*tr, gamma_n=gamma_n)
 
     def learn(self) -> float | None:
         if len(self.buffer) < self.learn_start or self.steps % LEARN_EVERY != 0:
             return None
 
         (obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
-         nm1, nm2, state, next_state) = self.buffer.sample(self.batch_size)
+         nm1, nm2, state, next_state, gamma_n) = self.buffer.sample(self.batch_size)
         t = lambda x, dt=torch.float32: torch.as_tensor(x, dtype=dt, device=self.device)
         obs1, obs2 = t(obs1), t(obs2)
         next_obs1, next_obs2 = t(next_obs1), t(next_obs2)
+        gamma_n = t(gamma_n)
         a1, a2 = t(a1, torch.int64), t(a2, torch.int64)
         r, done = t(r), t(done)
         nm1, nm2 = t(nm1), t(nm2)
@@ -252,7 +265,8 @@ class QMixAgent:
             nq1 = self.target[AGENT_1](next_obs1).gather(1, best1).squeeze(1)
             nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
             nq_tot = self.mixer_target(torch.stack([nq1, nq2], dim=1), next_state)
-            target_val = r + GAMMA * nq_tot * (1.0 - done)
+            # gamma_n = gamma^k (k = gecisin gercek ufku, bkz. nstep.py)
+            target_val = r + gamma_n * nq_tot * (1.0 - done)
 
         loss = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA)
         self.opt.zero_grad()

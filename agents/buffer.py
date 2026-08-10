@@ -17,19 +17,25 @@ class ReplayBuffer:
         self.reward = np.zeros(capacity, dtype=np.float32)
         self.done = np.zeros(capacity, dtype=np.float32)
         self.next_mask = np.zeros((capacity, n_actions), dtype=np.float32)
+        # n-adim ufku: hedefte  r + gamma_n * Q(s_{t+n})  seklinde kullanilir.
+        # Gecisle BIRLIKTE saklanir cunku episode sonundaki kisa pencerelerde
+        # ufuk n'den KUCUK olur (bkz. agents/nstep.py).
+        self.gamma_n = np.zeros(capacity, dtype=np.float32)
         self._i = 0
         self._full = False
 
     def __len__(self) -> int:
         return self.capacity if self._full else self._i
 
-    def push(self, obs, action, reward, next_obs, done, next_mask):
+    def push(self, obs, action, reward, next_obs, done, next_mask,
+             gamma_n: float = 1.0):
         i = self._i
         self.obs[i] = obs
         self.action[i] = action
         self.reward[i] = reward
         self.next_obs[i] = next_obs
         self.done[i] = float(done)
+        self.gamma_n[i] = gamma_n
         # Terminal gecislerde next_mask kullanilmaz (hedef r'ye esit) ama
         # tamamen sifir maske masked max'ta NEG_INF uretir; 1'lerle doldurup
         # sonra (1-done) ile carpiyoruz. Ikisi birden guvenli olsun.
@@ -41,4 +47,5 @@ class ReplayBuffer:
     def sample(self, batch_size: int):
         idx = self.rng.integers(0, len(self), size=batch_size)
         return (self.obs[idx], self.action[idx], self.reward[idx],
-                self.next_obs[idx], self.done[idx], self.next_mask[idx])
+                self.next_obs[idx], self.done[idx], self.next_mask[idx],
+                self.gamma_n[idx])

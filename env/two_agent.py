@@ -70,6 +70,13 @@ def play_episode(env: StrikeMissionEnv, agents: dict, train: bool,
 
         obs = next_obs
 
+    # n-adim penceresini episode sinirinda bosalt (bkz. agents/nstep.py).
+    # Olmazsa pencere bir sonraki episode'a sizar ve iki ayri episode'un
+    # odulleri ayni getiride toplanir.
+    if train:
+        for a in (AGENT_1, AGENT_2):
+            agents[a].end_episode()
+
     return info, losses
 
 
@@ -121,6 +128,9 @@ def play_episode_vdn(env: StrikeMissionEnv, agent, train: bool,
 
         obs = next_obs
 
+    if train:
+        agent.end_episode()          # n-adim penceresini bosalt (nstep.py)
+
     return info, losses
 
 
@@ -163,5 +173,8 @@ def play_episode_qmix(env: StrikeMissionEnv, agent, train: bool,
                 losses.append(loss)
 
         obs = next_obs
+
+    if train:
+        agent.end_episode()          # n-adim penceresini bosalt (nstep.py)
 
     return info, losses

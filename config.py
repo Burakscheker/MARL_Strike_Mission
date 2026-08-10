@@ -210,6 +210,15 @@ SEED = 0
 # (Phi=1'de bile 2.5x marj). Etkin ufuk 1/(1-gamma) = 5000 adim > 2800 episode.
 GAMMA = 0.9998
 
+# n-ADIM GETIRI — Strike_Mission.md §11.14 / agents/nstep.py
+# 1 = klasik tek adimlik TD (eski davranis, BIREBIR korunur).
+# >1 olunca hedef  sum gamma^k r_{t+k} + gamma^n max Q(s_{t+n})  olur ve
+# bootstrap payi azalir. Olculdu: uzun egitim politikayi bozuyor ve
+# bozulma epsilon DUSERKEN artiyor (yani kesiften degil ogrenmeden) —
+# 1-adim bootstrap'in gamma=0.9998 / 2800 adimda hata biriktirmesi en
+# olasi sebep. Bu knob o hipotezin testi. train.py --n-step ile ezilir.
+N_STEP = 1
+
 GRAD_CLIP = 10.0
 HIDDEN = 128
 LEARN_EVERY = 8
