@@ -6,7 +6,67 @@
 > hedefe varırsa takım ödülü fullenir.**
 > IQL / VDN / QMIX ile eğitip karşılaştıracağız.
 
-Durum: 🔬 Deney · Branch: `iql_vdn_qmix` · Güncelleme: 2026-08-06
+Durum: 🔬 Deney · Branch: `iql_vdn_qmix` · Güncelleme: 2026-08-07
+
+---
+
+## ⏸️ KALDIĞIMIZ YER (2026-08-07 13:50) — akşam buradan devam
+
+### Koşan iş: n-adım getiri deneyi (`--n-step 20`)
+
+**Neden:** Daha çok eğitmek işleri **kötüleştiriyor** (§11.13). VDN `surv_ratio`
+1000ep %4.23 → 3000ep %2.80; QMIX ikisinde de %0.00. Kritik ayrıntı:
+**epsilon düştükçe ölüm artıyor**, yani bozulma keşif gürültüsünden değil
+öğrenilen politikadan geliyor. İntihar kapısı kapalı (ölçüldü: ölmek −88 <
+oyalanmak −78), yani ayrı bir mekanizma. Hipotez: 1-adım TD bootstrap'i
+γ=0.9998 + 2800 adımlık episode'da hata biriktiriyor.
+
+**Kesildiği yer:** VDN ep1300, QMIX ep1025.
+
+**Checkpoint:** `runs/ckpt/n20_vdn_last.pt`, `runs/ckpt/n20_qmix_last.pt`
+— checkpoint her eval'da (500 episode'da bir) yazılıyor, yani en son kayıt
+**ep1000**. ep1000 sonrası ilerleme kayıp; devam ep1000'den başlar.
+
+**Devam komutu:**
+```
+PYTHONPATH=. python train.py --algo vdn --episodes 2000 --eval-every 500 \
+  --eval-episodes 30 --seed 0 --n-step 20 --eps-start 0.37 \
+  --resume-from runs/ckpt/n20_vdn_last.pt --tag n20b_vdn
+
+PYTHONPATH=. python train.py --algo qmix --episodes 2000 --eval-every 500 \
+  --eval-episodes 30 --seed 0 --n-step 20 --eps-start 0.37 \
+  --resume-from runs/ckpt/n20_qmix_last.pt --tag n20b_qmix
+```
+`--eps-start 0.37` = kesildiği andaki epsilon. 1.0'dan başlatmak öğrenilmiş
+politikayı yüzlerce episode boyunca rastgele aksiyonlarla bozar.
+
+### Şimdiye kadarki sonuç: ham başarı **her yerde %0**
+```
+VDN  n=20   ep500:%0.0  ep1000:%0.0
+QMIX n=20   ep500:%0.0  ep1000:%0.0
+```
+Ara metrikler n=20 lehine (ep1000'de VDN eğitim ölüm ortalaması n=1'de 1.77,
+n=20'de 0.77; QMIX ep500 analitik 0.564 → 0.788) — **ama bunlar karar
+metriği değil.** `n=1`'de de ep1000 iyiydi, çöküş *sonrasında* geliyordu:
+```
+VDN n=1 analitik: ep500 0.521 → ep1000 0.791 → ep1500 0.756 → ep2000 0.562 → ep3000 0.534
+```
+**Hipotez ancak ep1500-3000 aralığı görülünce doğrulanır ya da düşer.**
+
+### Bittiğinde koşulacak
+```
+PYTHONPATH=. python -m eval.evaluate --algo vdn  --ckpt runs/ckpt/n20b_vdn_last.pt  --maps 50 --tag n20e_vdn
+PYTHONPATH=. python -m eval.evaluate --algo qmix --ckpt runs/ckpt/n20b_qmix_last.pt --maps 50 --tag n20e_qmix
+```
+Kıyas (`n=1`, aynı tohum, aynı 50 harita): VDN %4.23 (1000ep) / %2.80
+(3000ep), QMIX %0.00 / %0.00.
+
+### Rapora HAZIR olan (bu deneyden bağımsız, kesinleşmiş)
+3 tohum × 3 algoritma, 50 ortak held-out harita, eşleştirilmiş Wilcoxon:
+**VDN %5.59 > IQL %2.16 > QMIX %0.47**, üç ikili kıyasta da p ≤ 0.001.
+VDN üç tohumun üçünde de kazandı. Ham başarı oranı ise üçünü ayıramıyor
+(hepsi birbirinin hata payı içinde) — `surv_ratio`'nun neden ana metrik
+olduğunun kanıtı.
 
 ---
 
