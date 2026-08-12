@@ -82,8 +82,20 @@ def save(agent, algo: str, path_stem: str):
 
 # --------------------------------------------------------------- degerlendirme
 
+# NOT — "analytic_surv_team" SISEN bir metriktir, tek basina okunmamalidir:
+# GIDILEN yolu olcer, yani yarida olen/timeout yiyen ajanin yolu kisa kalir ve
+# "guvenli" gorunur (uc noktada hic hareket etmeyen ajan 1.000 alir).
+# BU TUZAGA FIILEN DUSULDU: n-adim getiri deneyi (2026-08-08) boyunca
+# analitik 0.534 -> 0.766 "iyilesme" diye okundu, gercekte surv_ratio
+# 0.0280 -> 0.0000'a DUSMUSTU; ajan guvenli gorunuyordu cunku hicbir yere
+# gitmiyordu. 6 saatlik kosu yanlis sinyalle izlendi.
+# Bu yuzden asagidaki IKI metrik eklendi ve fmt_eval'da analitikten ONCE
+# basiliyor — ikisi de SISMEZ:
+#   route_reached : rotasi hedefe VARIYOR mu (zar kapali) — "gidiyor mu?"
+#   mission_prob  : varmayan rota 0 alir, yani hareketsizlik odullendirilemez
 METRIC_KEYS = ("team_success", "both_reached", "n_dead", "timeout", "steps",
                "outer_total", "inner_total", "route_overlap",
+               "route_reached", "mission_prob",
                "analytic_surv_team", "surv1", "surv2")
 
 
@@ -102,21 +114,55 @@ def evaluate(env, agent, algo: str, episodes: int, seed: int = 12345) -> dict:
     """
     runner = RUNNER[algo]
     env.rng = np.random.default_rng(seed)      # olum zarlari icin sabit tohum
+    renv = _route_twin(env)
+    renv.rng = np.random.default_rng(seed)
     acc = {k: 0.0 for k in METRIC_KEYS}
     seeds = eval_map_seeds(episodes) if env.radar_random else [None] * episodes
     for s in seeds:
         rk = {"map_seed": s, "n_radar": C.N_RADAR} if env.radar_random else None
         info, _ = runner(env, agent, train=False, reset_kwargs=rk)
+        # AYNI haritada zar KAPALI ikinci kosu: ajanin niyet ettigi tam rota.
+        rinfo, _ = runner(renv, agent, train=False, reset_kwargs=rk)
+        m1 = rinfo["surv1"] if rinfo["reached1"] else 0.0
+        m2 = rinfo["surv2"] if rinfo["reached2"] else 0.0
+        info = dict(info)
+        info["route_reached"] = float(rinfo["reached1"] or rinfo["reached2"])
+        info["mission_prob"] = 1.0 - (1.0 - m1) * (1.0 - m2)
         for k in METRIC_KEYS:
             acc[k] += float(info[k])
     return {k: v / episodes for k, v in acc.items()}
 
 
+def _route_twin(env):
+    """Zar KAPALI ikiz ortam — ajanin NIYET ETTIGI tam rotayi olcmek icin.
+
+    env'e ilistirilip onbelleklenir; her eval'da yeniden kurmak pahali
+    (risk-mesafe haritasi harita basina yeniden cikariliyor). Egitim
+    ortaminin TUM ayarlarini aynalar, sadece death_enabled=False.
+    """
+    tw = getattr(env, "_route_twin_env", None)
+    if tw is None:
+        tw = StrikeMissionEnv(n=env.n, max_steps=env.max_steps, seed=999,
+                              alert_enabled=env.alert_enabled,
+                              risk_shaping=env.risk_shaping,
+                              hazard_mode=env.hazard_mode,
+                              radar_random=env.radar_random,
+                              n_radar=env.n_radar,
+                              death_enabled=False)
+        env._route_twin_env = tw
+    return tw
+
+
 def fmt_eval(m: dict) -> str:
-    return (f"takim={m['team_success']*100:5.1f}%  ikisi={m['both_reached']*100:5.1f}%  "
+    # SIRA ONEMLI: sismeyen metrikler (varis/gorev) ONCE, sisen analitik
+    # SONRA ve parantez icinde — okuyan kisi once dogru sinyali gorsun.
+    return (f"takim={m['team_success']*100:5.1f}%  "
+            f"VARIS={m['route_reached']*100:5.1f}%  "
+            f"gorev={m['mission_prob']:.4f}  "
             f"olu={m['n_dead']:.2f}  adim={m['steps']:6.0f}  "
             f"maruziyet dis/ic={m['outer_total']:5.0f}/{m['inner_total']:5.0f}  "
-            f"analitik={m['analytic_surv_team']:.3f}  ortusme={m['route_overlap']:.2f}")
+            f"(analitik={m['analytic_surv_team']:.3f})  "
+            f"ortusme={m['route_overlap']:.2f}")
 
 
 # ---------------------------------------------------------------------- main
