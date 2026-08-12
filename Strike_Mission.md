@@ -10,7 +10,46 @@ Durum: 🔬 Deney · Branch: `iql_vdn_qmix` · Güncelleme: 2026-08-07
 
 ---
 
-## ⏸️ KALDIĞIMIZ YER (2026-08-07 13:50) — akşam buradan devam
+## ❌ SONUÇLANDI (2026-08-08): n-adım getiri İŞE YARAMADI
+
+**Hipotez reddedildi.** 3000 episode, VDN + QMIX, seed 0, 50 held-out harita:
+
+| | VDN `n=1` | VDN `n=20` | QMIX `n=1` | QMIX `n=20` |
+|---|---:|---:|---:|---:|
+| **`surv_ratio`** | **%2.80** | **%0.00** | %0.00 | %0.00 |
+| rotası hedefe varıyor | 8/50 | **0/50** | 0/50 | 0/50 |
+| ölü/episode | 1.57 | 0.96 | 1.27 | 0.68 |
+| timeout | %58 | **%64** | — | **%74** |
+
+n-adım getiri VDN'i **düşürdü**. Mekanizma: 20 adımlık pencere ödülleri
+topladığı için "hareket etme, ceza alma" politikası daha da cazip hale
+geliyor — riskten kaçınmayı öğretti, hedefe gitmeyi bozdu.
+
+### 🚨 Bu deneyden çıkan ASIL ders: yanlış metriğe bakıldı
+
+Koşu boyunca "bozulma durdu, n=20 çalışıyor" diye raporlandı. **Yanlıştı.**
+Eğitim eval'ındaki `analitik` (`analytic_surv_team`) GİDİLEN yolu ölçer ve
+hedefe varmayan politikalarda **şişer** — bu proje bunu zaten tespit edip
+`mission_prob`'u tam bu yüzden yazmıştı (§11.9), sonra aynı tuzağa düşüldü:
+
+```
+analitik   n=1 ep3000 0.534  ->  n=20 ep3000 0.766     ("iyilesme")
+surv_ratio n=1        0.0280 ->  n=20        0.0000    (KOTULESME)
+```
+
+Ajan "güvenli" görünüyordu çünkü **hiçbir yere gitmiyordu**.
+
+**Kök neden ölçüm altyapısında:** eğitim sırasındaki eval `surv_ratio`
+hesaplamıyor, sadece `analitik` veriyor. 6 saatlik koşu yanlış sinyale
+bakılarak izlendi. **Düzeltme: eğitim eval'ına `route_reached` eklenmeli**
+— şişmez, ucuz, ve "gidiyor mu" sorusunu doğrudan cevaplar.
+
+### Değişmeyen sonuç
+3 tohumlu ana karşılaştırma (`n=1`, 1000 episode) geçerliliğini koruyor:
+**VDN %5.59 > IQL %2.16 > QMIX %0.47**, eşleştirilmiş Wilcoxon p ≤ 0.001.
+
+<details>
+<summary>Deneyin orijinal planı (arşiv)</summary>
 
 ### Koşan iş: n-adım getiri deneyi (`--n-step 20`)
 
@@ -67,6 +106,8 @@ Kıyas (`n=1`, aynı tohum, aynı 50 harita): VDN %4.23 (1000ep) / %2.80
 VDN üç tohumun üçünde de kazandı. Ham başarı oranı ise üçünü ayıramıyor
 (hepsi birbirinin hata payı içinde) — `surv_ratio`'nun neden ana metrik
 olduğunun kanıtı.
+
+</details>
 
 ---
 
