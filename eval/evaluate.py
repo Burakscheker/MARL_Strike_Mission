@@ -95,13 +95,22 @@ def rollout(env, agent, algo: str, map_seed: int) -> dict:
 # --------------------------------------------------------------------- ana
 
 def evaluate_maps(n_maps: int, agent=None, algo: str | None = None,
-                  seed: int = 12345) -> dict:
-    env = StrikeMissionEnv(seed=seed, radar_random=True, n_radar=C.N_RADAR)
+                  seed: int = 12345, max_steps: int = C.MAX_STEPS) -> dict:
+    # max_steps DISARIDAN verilebiliyor: MAX_STEPS=2800 (optimal 1998'in 1.4
+    # kati) bir TASARIM SECIMIYDI, spec degil. Olculdu: 30 radarda ajanin
+    # rotasi ortalama 2697 adim ve timeout %38 — yani limit fiilen baglayici
+    # kisit. Bunu yeniden EGITMEDEN test etmek icin bu parametre var.
+    # UYARI (confound): gozlem skalari #2 = t/max_steps. Ajan 2800'e gore
+    # egitildi; limiti degistirmek o sinyalin olcegini kaydirir. Yani bu
+    # olcum "butce baglayici mi" sorusuna cevap verir, nihai sayi DEGILDIR.
+    env = StrikeMissionEnv(seed=seed, radar_random=True, n_radar=C.N_RADAR,
+                           max_steps=max_steps)
     # ROTA ORTAMI: zar kapali, ucak olmez. Ajanin NIYET ETTIGI tam rotayi
     # gormek icin (bkz. StrikeMissionEnv.death_enabled). Bunsuz surv_ratio
     # yarida olen politikalarda SISIYOR: kisa yol = "guvenli" yol.
     route_env = (StrikeMissionEnv(seed=seed, radar_random=True,
-                                  n_radar=C.N_RADAR, death_enabled=False)
+                                  n_radar=C.N_RADAR, max_steps=max_steps,
+                                  death_enabled=False)
                  if agent is not None else None)
     rng = np.random.default_rng(seed)
     rows = []
@@ -212,6 +221,8 @@ def main():
     ap.add_argument("--ckpt", default=None, help="egitilmis model (.pt)")
     ap.add_argument("--maps", type=int, default=C.EVAL_N_MAPS)
     ap.add_argument("--tag", default="eval")
+    ap.add_argument("--max-steps", type=int, default=C.MAX_STEPS,
+                    help="adim limiti (varsayilan config.MAX_STEPS=2800)")
     args = ap.parse_args()
 
     agent = None
@@ -235,7 +246,8 @@ def main():
     else:
         print("model YOK — sadece referans politikalar olculuyor")
 
-    res = evaluate_maps(args.maps, agent, args.algo)
+    res = evaluate_maps(args.maps, agent, args.algo,
+                        max_steps=args.max_steps)
     text = summarize(res["rows"], agent is not None)
     print("\n" + text)
 

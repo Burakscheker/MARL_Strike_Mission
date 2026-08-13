@@ -295,7 +295,7 @@ def main():
               f"(ilerleme {frac0:.2f}), {C.EPS_END} tabanina "
               f"ep {int(floor)} civarinda iner")
     t_start = time.perf_counter()
-    best = -1.0
+    best = (-1.0, -1.0)   # (route_reached, mission_prob)
 
     for ep in range(1, episodes + 1):
         set_eps(agent, algo, frac0 + (1.0 - frac0) * min(1.0, ep / floor))
@@ -345,7 +345,36 @@ def main():
                             *[f"{m[k]:.4f}" for k in METRIC_KEYS]])
             log_f.flush()
             print(f"  [eval ep{ep}] {fmt_eval(m)}", flush=True)
-            score = m["team_success"] + m["analytic_surv_team"]
+            # CHECKPOINT SECIM OLCUTU — analytic_surv_team KULLANILMAZ.
+            # BUG (bulundu ve duzeltildi): olcut
+            #     score = team_success + analytic_surv_team
+            # idi ve analytic_surv_team SISEN metrik (GIDILEN yolu olcer,
+            # hedefe varmayan politikada 1.0'a yaklasir). Sonuc: secici
+            # sistematik olarak EN AZ HAREKET EDEN modeli seciyordu.
+            # OLCULDU (r30s0, 30 radar):
+            #   IQL  gercek tepe ep1000 (gorev 0.1029) -> ep500 secildi
+            #        (VARIS %0.0); 50 haritada 0/50 varis, surv_ratio 0.0000
+            #   QMIX gercek tepe ep750  (gorev 0.0601) -> ep500 secildi
+            #        (VARIS %3.3); 50 haritada 1/50
+            #   VDN  sans eseri kurtuldu (ep500 zaten gercek tepesiydi)
+            # Yani iki algoritma kendi EN KOTU checkpoint'iyle olculdu ve
+            # karsilastirma kontamine oldu.
+            # mission_prob sismez: hedefe varmayan rota 0 alir.
+            # BIRINCIL: route_reached (rotasi hedefe VARIYOR mu).
+            # Burak: "amacimiz hedefe en cok varan rotayi checkpoint'lemek".
+            # ESITLIK BOZUCU: mission_prob (varis x hayatta kalma) — ayni
+            # varis oranini veren iki checkpoint'ten GUVENLI olani secilir.
+            # Tuple karsilastirmasi tam olarak bunu yapar (leksikografik).
+            #
+            # team_success KULLANILMIYOR: zar sonucuna bagli, 30 haritada
+            # 1-2 sayimdan ibaret, tohumdan tohuma yer degistiriyor.
+            # analytic_surv_team ASLA kullanilmamali: SISER (gidilen yolu
+            # olcer, hedefe varmayan politikada 1.0'a yaklasir). Bu projede
+            # UC KEZ tuzak kurdu — en sonuncusu tam bu satirdi ve secici
+            # sistematik olarak EN AZ HAREKET EDEN modeli seciyordu:
+            #   IQL  gercek tepe ep1000 -> ep500 secildi (VARIS %0.0)
+            #   QMIX gercek tepe ep750  -> ep500 secildi (VARIS %3.3)
+            score = (m["route_reached"], m["mission_prob"])
             stem = os.path.join(C.RUNS_DIR, "ckpt", tag)
             if score >= best:
                 best = score
