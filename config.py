@@ -31,17 +31,30 @@ GOAL = (GRID_N - 1, GRID_N - 1)  # H  (+500, -500) sag alt
 RADARS = ((280, 220), (400, 700), (780, 400))
 
 # RASTGELE HARITA (Asama 11, Burak 2026-08-06): "her episode farkli bi haritada
-# olsun trainde de testde de", 40 radar, merkezler uniform, CAKISMA SERBEST
+# olsun trainde de testde de", merkezler uniform, CAKISMA SERBEST
 # ("merkezleri arasinda 5 fark olabilir, ustuste biner alanlari").
+#
+# 40 -> 30 RADAR (Burak, 2026-08-08). Olculdu (30 held-out harita, 160/100):
+#   40 radar -> guvenli %39.0  ic halka %32.0  oracle ort 0.5556  takim ~%65
+#   30 radar -> guvenli %48.8  ic halka %25.1  oracle ort 0.6977  takim ~%91
+# H'nin bir halkanin icinde kalma orani da %38 -> %20'ye dustu (o haritalarda
+# hedefe varmak icin ic halkaya girmek ZORUNLU oldugu icin tavani cakiyordu).
+# Problem hala gercek planlama gerektiriyor: naif merdiven 0.0005, yani
+# taban ile tavan arasinda ~1400 kat var.
+#
+# DIKKAT — KIYASLANABILIRLIK: 40 radarda alinan 3 tohumlu sonuc
+# (VDN %5.59 > IQL %2.16 > QMIX %0.47) bu degisiklikten SONRAKI kosularla
+# KARSILASTIRILAMAZ. Harita zorlugu ve eval seti degisti; o tablo "40 radar"
+# etiketiyle arsivde kalir.
 RADAR_RANDOM = True
-N_RADAR = 40
+N_RADAR = 30
 
 # Curriculum: erken egitimde seyrek harita (bol pozitif ornek), sonra yogun.
 # Olculdu (baselines/scan_random_maps): 10 radarda oracle tavani %92.5 ve
-# medyan %100; 40 radarda ortalama %32 / medyan %7.2. 40'ta SIFIRDAN baslamak
-# neredeyse hic basarili episode gormemek demek.
+# medyan %100. Yogun uctan SIFIRDAN baslamak neredeyse hic basarili episode
+# gormemek demek. END degeri N_RADAR ile birlikte guncellenmeli.
 CURRICULUM_RADAR_START = 10
-CURRICULUM_RADAR_END = 40
+CURRICULUM_RADAR_END = 30
 CURRICULUM_FRAC = 0.6          # egitimin bu kesrinde END'e ulasir
 
 # DEGERLENDIRME her zaman N_RADAR'da ve SABIT tohumlu ORTAK harita setinde.

@@ -344,9 +344,12 @@ def test_random_maps():
     check("egitim/test harita tohumlari KESISMIYOR",
           tr_max < min(eval_map_seeds()),
           f"egitim max={tr_max} < test min={min(eval_map_seeds())}")
-    check("curriculum rampasi 10 -> 40",
-          curriculum_n_radar(1, 10_000) == 10
-          and curriculum_n_radar(10_000, 10_000) == 40)
+    # Sinirlar config'den OKUNUYOR, gomulu DEGIL: N_RADAR 40 -> 30 yapilinca
+    # bu test "10 -> 40" diye sabit yazildigi icin kirilmisti. Radar sayisi
+    # Burak'in ayar dugmesi; test onu takip etmeli, kilitlememeli.
+    check(f"curriculum rampasi {C.CURRICULUM_RADAR_START} -> {C.CURRICULUM_RADAR_END}",
+          curriculum_n_radar(1, 10_000) == C.CURRICULUM_RADAR_START
+          and curriculum_n_radar(10_000, 10_000) == C.CURRICULUM_RADAR_END)
 
 
 def test_start_in_zone_rolls():
