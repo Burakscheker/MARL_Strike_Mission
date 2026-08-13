@@ -92,8 +92,18 @@ MAP_MAX_ITER = 120
 OUTER_HALF = 80
 INNER_HALF = 50
 
-# Adim limiti. Optimal yol = manhattan(B,H) = 1998 adim. 1.4x tampon.
-MAX_STEPS = 2800
+# Adim limiti. Optimal yol = manhattan(B,H) = 1998 adim.
+#
+# 2800 -> 4000 (2026-08-08). 2800 = 1.4x optimal idi; OPTIMAL yol icin makul
+# ama OGRENILMIS (optimal olmayan) politikanin dolambacli rotasina DAR.
+# OLCULDU (r30s0_vdn, 50 held-out harita, AYNI checkpoint, yeniden egitim YOK):
+#   MAX_STEPS 2800 -> surv_ratio %18.3  VARIS %48  timeout %38  (rota 2697 adim)
+#             4000 -> surv_ratio %29.3  VARIS %64  timeout %36
+#             6000 -> surv_ratio %32.0  VARIS %72  timeout %28
+# Yani %14'luk takim basarisi gercek seviyemiz degil, bu sabitin yarattigi
+# tavandi. 2800->4000 +11 puan / +%43 sure; 4000->6000 sadece +2.7 puan /
+# +%50 sure -> 4000 tatli nokta.
+MAX_STEPS = 4000
 
 # ---------------------------------------------------------------- risk modeli
 # Strike_Mission.md §0.2: ADIM BASI hazard. Burak'in verdigi %20/%90 "bolgeyi
@@ -177,7 +187,13 @@ R_TIMEOUT = -50.0              # hicbiri varmadan sure doldu
 # ("deneyip yolda olen" ~ +120*ilerleme) haritayi kat eden ajan hic
 # denemeyenden cok daha yuksek puan alir. Cezalandirilan sey KASTEN erken
 # bitirmek.
-R_ALL_DEAD = -50.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
+R_ALL_DEAD = -70.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
+# NOT — R_ALL_DEAD MAX_STEPS'E BAGLI, ikisi BIRLIKTE degistirilir:
+# MAX_STEPS 2800 -> 4000 yapilinca oyalanmanin maliyeti -78'den -90'a cikti
+# ve -50 ile kapi YENIDEN ACILDI (intihar -80 < oyalanma -90 = karli).
+#   -70 ile: 2*(-15) + (-70) = -100 <= -50 + 4000*(-0.01) = -90  -> KAPALI
+# 10 puan marj var. MAX_STEPS bir daha degisirse bu esitsizlik tekrar
+# kontrol edilmeli (tests/test_env.py otomatik dogruluyor).
 
 # Adim basi risk maliyeti = R_RISK_COEF * p_death(hucre). Seyrek/gurultulu
 # olum sinyalini yogun/deterministik hale getirir. 0.0 -> kapali.

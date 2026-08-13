@@ -175,7 +175,12 @@ def main():
     ap.add_argument("--tag", default=None)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--eval-every", type=int, default=None)
-    ap.add_argument("--eval-episodes", type=int, default=5)
+    ap.add_argument("--eval-episodes", type=int, default=50,
+                    help="eval harita sayisi. 5 COK AZ: %5'lik gercek basari "
+                         "5 haritada %59 ihtimalle 0 gorunur. Ustelik ardisik "
+                         "eval'lar arasi gorev metrigi 100 kat oynuyor "
+                         "(olculdu, r30s0_vdn: 0.1875 -> 0.0280 -> 0.0021), "
+                         "yani 30 harita bile checkpoint secmek icin gurultulu.")
     ap.add_argument("--demo-episodes", type=int, default=C.DEMO_EPISODES)
     ap.add_argument("--max-steps", type=int, default=C.MAX_STEPS)
     ap.add_argument("--alert", action="store_true",
