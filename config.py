@@ -222,7 +222,21 @@ R_ALL_DEAD = -70.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 # indirmek, ajanin gordugu riski yariya indirmekti.
 # 15.0 = |R_DEATH| ile yogun kanal beklenen olum maliyetinin TAMAMINI tasir.
 # Ablation olarak 0.0 (sadece stokastik) ve 7.5 de kosulmali.
-R_RISK_COEF = 15.0
+# 15.0 -> 65.0 (2026-08-08). OLCULDU: ajan rota basina 2.8 IC HALKA girisi
+# yapiyor, oracle 0.2. Her giris %90 olum zari -> hayatta kalma 0.026 vs 0.63.
+# Sebep FIYATLAMA: ic halkaya girmenin ajana maliyeti R_RISK_COEF*0.9 = 13.5,
+# hedefe varmanin odulu +50. Yani uc halkayi delip gecmek MATEMATIKSEL OLARAK
+# KARLI (-40.5 vs +50). Ajan dogru hesapliyor, biz yanlis fiyatlamisiz.
+# Gercek bedel sadece olum cezasi degil, KAYBEDILEN GOREV ODULU de:
+#     p * (|R_DEATH| + R_FIRST_GOAL) = 0.9 * (15 + 50) = 58.5
+# yani 13.5 degil 58.5 olmaliydi -> 4.3 kat dusuk fiyatlamisiz.
+# 65 = |R_DEATH| + R_FIRST_GOAL.
+#
+# DIKKAT: RISK_W = |R_RISK_COEF/R_STEP| oldugu icin bu deger risk-mesafe
+# haritasini (shaping potansiyeli) VE oracle referansini birlikte degistirir:
+# 1500 -> 6500. Oracle daha cok dolasir, yani tavan da degisir; eski
+# surv_ratio sayilariyla dogrudan kiyaslanamaz.
+R_RISK_COEF = 65.0
 
 # ---------------------------------------------------------------- egitim (ortak)
 SEED = 0
@@ -250,6 +264,16 @@ N_STEP = 1
 
 GRAD_CLIP = 10.0
 HIDDEN = 128
+# LEARN_EVERY=16 + batch=64 DENENDI VE GERI ALINDI (2026-08-08).
+# Hipotez: cagri sayisini yariya indirip batch'i ikiye katlarsak ayni ornek
+# akisini korur, Python/optimizer YUKUNDEN kazaniriz.
+# OLCULDU (ayni ortam, 4 episode, tam egitim dongusu):
+#   LEARN_EVERY=8,  batch=32  ->  1.447 ms/adim
+#   LEARN_EVERY=16, batch=64  ->  1.486 ms/adim
+# Kazanc YOK, hafif kotu. Cunku learn() maliyetini cagri yuku degil BATCH
+# HESABI belirliyor; 2x batch, 1/2 cagri = sabit toplam hesap.
+# Karsiliksiz risk (buyuk batch = az gradyan gurultusu, ogrenme dinamigi
+# degisir), o yuzden eski degerlere donuldu.
 LEARN_EVERY = 8
 
 # --- ODUL GORUNURLUGU (Strike_Mission.md §11.11) --------------------------
@@ -318,7 +342,7 @@ IQL_EPS_DECAY_STEPS = 1_000_000
 IQL_LEARN_START = 2_000
 IQL_LR = 1e-4
 IQL_TARGET_UPDATE = 2_000
-IQL_EVAL_EVERY = 200
+IQL_EVAL_EVERY = 250
 
 TRAIN_HARM_WINDOW = 100
 TRAIN_HARM_LOG_EVERY = 25
@@ -339,7 +363,7 @@ VDN_EPS_DECAY_STEPS = 2_000_000
 VDN_LEARN_START = 2_000
 VDN_LR = 3e-5
 VDN_TARGET_UPDATE = 4_000
-VDN_EVAL_EVERY = 200
+VDN_EVAL_EVERY = 250
 
 # ---------------------------------------------------------------- QMIX (Asama 7)
 QMIX_EPISODES = 2_000
@@ -351,7 +375,7 @@ QMIX_EPS_DECAY_STEPS = 2_000_000
 QMIX_LEARN_START = 2_000
 QMIX_LR = 3e-5
 QMIX_TARGET_UPDATE = 4_000
-QMIX_EVAL_EVERY = 200
+QMIX_EVAL_EVERY = 250
 QMIX_MIXER_EMBED = 32
 
 # ---------------------------------------------------------------- gozlem
