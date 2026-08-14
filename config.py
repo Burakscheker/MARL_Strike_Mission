@@ -94,16 +94,17 @@ INNER_HALF = 50
 
 # Adim limiti. Optimal yol = manhattan(B,H) = 1998 adim.
 #
-# 2800 -> 4000 (2026-08-08). 2800 = 1.4x optimal idi; OPTIMAL yol icin makul
-# ama OGRENILMIS (optimal olmayan) politikanin dolambacli rotasina DAR.
-# OLCULDU (r30s0_vdn, 50 held-out harita, AYNI checkpoint, yeniden egitim YOK):
+# 2800 -> 4000 -> 3000 (2026-08-08). Once 2800'un ogrenilmis (optimal
+# olmayan) rotalar icin DAR oldugu olculdu (r30s0_vdn, 50 held-out harita,
+# AYNI checkpoint, yeniden egitim YOK):
 #   MAX_STEPS 2800 -> surv_ratio %18.3  VARIS %48  timeout %38  (rota 2697 adim)
 #             4000 -> surv_ratio %29.3  VARIS %64  timeout %36
 #             6000 -> surv_ratio %32.0  VARIS %72  timeout %28
-# Yani %14'luk takim basarisi gercek seviyemiz degil, bu sabitin yarattigi
-# tavandi. 2800->4000 +11 puan / +%43 sure; 4000->6000 sadece +2.7 puan /
-# +%50 sure -> 4000 tatli nokta.
-MAX_STEPS = 4000
+# 4000 tatli nokta olarak secilmisti. Sonra Burak: "Tolga'nin projesinde
+# MAX_STEPS 3000, bizde de oyle olsun" -- iki proje arasi kiyaslanabilirlik
+# icin 3000'e cekildi. 4000'e gore beklenen bedel: yukaridaki egriye gore
+# surv_ratio 4000 ile 2800 arasi bir yere duser (henuz olculmedi).
+MAX_STEPS = 3000
 
 # ---------------------------------------------------------------- risk modeli
 # Strike_Mission.md §0.2: ADIM BASI hazard. Burak'in verdigi %20/%90 "bolgeyi
