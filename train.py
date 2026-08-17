@@ -201,18 +201,9 @@ def main():
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
-    ap.add_argument("--n-step", type=int, default=None,
-                    help="n-adim getiri ufku (varsayilan config.N_STEP=1). "
-                         ">1 bootstrap payini azaltir; uzun egitimdeki "
-                         "bozulma hipotezinin testi (bkz. agents/nstep.py).")
     ap.add_argument("--no-mixer-transfer", action="store_true")
     args = ap.parse_args()
 
-    if args.n_step is not None:          # ajanlar kurulmadan ONCE ezilmeli
-        C.N_STEP = args.n_step
-        import agents.dqn, agents.vdn, agents.qmix
-        for m in (agents.dqn, agents.vdn, agents.qmix):
-            m.N_STEP = args.n_step
     algo = args.algo
     episodes = args.episodes or getattr(C, f"{algo.upper()}_EPISODES")
     eval_every = args.eval_every or getattr(C, f"{algo.upper()}_EVAL_EVERY")

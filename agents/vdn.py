@@ -28,8 +28,7 @@ import torch
 import torch.nn as nn
 
 from agents.networks import build_qnet, masked_q
-from agents.nstep import SPEC_VDN, NStepAccumulator
-from config import (HUBER_BETA, N_STEP, AGENT_1, AGENT_2, EPS_END, EPS_START, GAMMA, GRAD_CLIP,
+from config import (HUBER_BETA, AGENT_1, AGENT_2, EPS_END, EPS_START, GAMMA, GRAD_CLIP,
                     LEARN_EVERY, N_ACTIONS, OBS_DIM, VDN_BATCH, VDN_BUFFER,
                     VDN_EPS_DECAY_STEPS, VDN_LEARN_START, VDN_LR,
                     VDN_TARGET_UPDATE)
@@ -57,8 +56,6 @@ class JointReplayBuffer:
         self.next_mask1 = np.zeros((capacity, n_actions), dtype=np.float32)
         self.next_mask2 = np.zeros((capacity, n_actions), dtype=np.float32)
         self.done = np.zeros(capacity, dtype=np.float32)
-        # n-adim ufku (bkz. agents/nstep.py) — pencere kisaysa gamma^k < gamma^n
-        self.gamma_n = np.zeros(capacity, dtype=np.float32)
         self._i = 0
         self._full = False
 
@@ -66,14 +63,13 @@ class JointReplayBuffer:
         return self.capacity if self._full else self._i
 
     def push(self, obs1, a1, obs2, a2, reward, next_obs1, next_obs2, done,
-             next_mask1, next_mask2, gamma_n: float = 1.0):
+             next_mask1, next_mask2):
         i = self._i
         self.obs1[i], self.obs2[i] = obs1, obs2
         self.action1[i], self.action2[i] = a1, a2
         self.reward[i] = reward
         self.next_obs1[i], self.next_obs2[i] = next_obs1, next_obs2
         self.done[i] = float(done)
-        self.gamma_n[i] = gamma_n
         # Terminal'de next_mask kullanilmaz ama tamamen sifir maske masked_q'da
         # NEG_INF uretir; guvenlik icin 1'lerle doldur (agents/buffer.py ile ayni onlem).
         self.next_mask1[i] = np.ones_like(next_mask1) if done else next_mask1
@@ -86,8 +82,7 @@ class JointReplayBuffer:
         idx = self.rng.integers(0, len(self), size=batch_size)
         return (self.obs1[idx], self.action1[idx], self.obs2[idx], self.action2[idx],
                 self.reward[idx], self.next_obs1[idx], self.next_obs2[idx],
-                self.done[idx], self.next_mask1[idx], self.next_mask2[idx],
-                self.gamma_n[idx])
+                self.done[idx], self.next_mask1[idx], self.next_mask2[idx])
 
 
 class VDNAgent:
@@ -124,8 +119,6 @@ class VDNAgent:
                  + list(self.online[AGENT_2].parameters()))
         self.opt = torch.optim.Adam(params, lr=lr)
         self.buffer = JointReplayBuffer(buffer_size, obs_dim, n_actions, self.rng)
-        # n-ADIM GETIRI (agents/nstep.py). N_STEP=1 -> eski davranis BIREBIR.
-        self.nstep = NStepAccumulator(N_STEP, GAMMA, SPEC_VDN)
         self.steps = 0
         self.eps_progress: float | None = None   # bkz. eps / set_eps_progress
 
@@ -167,31 +160,21 @@ class VDNAgent:
     # ------------------------------------------------------------- ogrenme
 
     def push(self, *joint_transition):
-        for tr, gamma_n in self.nstep.push(joint_transition):
-            self.buffer.push(*tr, gamma_n=gamma_n)
+        self.buffer.push(*joint_transition)
         self.steps += 1
-
-    def end_episode(self):
-        """Episode sinirinda kalan kisa pencereleri bosalt.
-
-        SART: bir ajanin episode'u KESILME (truncation) ile bitebiliyor ve o
-        durumda done=False geliyor; bosaltilmazsa n-adim penceresi BIR SONRAKI
-        episode'a sizar ve iki ayri episode'un odulleri toplanir."""
-        for tr, gamma_n in self.nstep.flush():
-            self.buffer.push(*tr, gamma_n=gamma_n)
 
     def learn(self) -> float | None:
         if len(self.buffer) < self.learn_start or self.steps % LEARN_EVERY != 0:
             return None
 
         (obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
-         nm1, nm2, gamma_n) = self.buffer.sample(self.batch_size)
+         nm1, nm2) = self.buffer.sample(self.batch_size)
         t = lambda x, dt=torch.float32: torch.as_tensor(x, dtype=dt, device=self.device)
         obs1, obs2 = t(obs1), t(obs2)
         next_obs1, next_obs2 = t(next_obs1), t(next_obs2)
         a1, a2 = t(a1, torch.int64), t(a2, torch.int64)
         r, done = t(r), t(done)
-        nm1, nm2, gamma_n = t(nm1), t(nm2), t(gamma_n)
+        nm1, nm2 = t(nm1), t(nm2)
 
         q1 = self.online[AGENT_1](obs1).gather(1, a1.unsqueeze(1)).squeeze(1)
         q2 = self.online[AGENT_2](obs2).gather(1, a2.unsqueeze(1)).squeeze(1)
@@ -203,8 +186,7 @@ class VDNAgent:
             best2 = masked_q(self.online[AGENT_2](next_obs2), nm2).argmax(dim=1, keepdim=True)
             nq1 = self.target[AGENT_1](next_obs1).gather(1, best1).squeeze(1)
             nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
-            # gamma_n = gamma^k (k = gecisin gercek ufku, bkz. nstep.py)
-            target_val = r + gamma_n * (nq1 + nq2) * (1.0 - done)
+            target_val = r + GAMMA * (nq1 + nq2) * (1.0 - done)
 
         loss = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA)
         self.opt.zero_grad()

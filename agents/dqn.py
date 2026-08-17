@@ -10,9 +10,8 @@ import torch
 import torch.nn as nn
 
 from agents.buffer import ReplayBuffer
-from agents.nstep import SPEC_DQN, NStepAccumulator
 from agents.networks import build_qnet, masked_q
-from config import (HUBER_BETA, N_STEP, DQN_BATCH, DQN_BUFFER, DQN_EPS_DECAY_STEPS, DQN_LR,
+from config import (HUBER_BETA, DQN_BATCH, DQN_BUFFER, DQN_EPS_DECAY_STEPS, DQN_LR,
                     DQN_LEARN_START, DQN_TARGET_UPDATE, EPS_END, EPS_START,
                     GAMMA, GRAD_CLIP, LEARN_EVERY, N_ACTIONS, OBS_DIM)
 
@@ -49,9 +48,6 @@ class DQNAgent:
 
         self.opt = torch.optim.Adam(self.online.parameters(), lr=lr)
         self.buffer = ReplayBuffer(buffer_size, obs_dim, n_actions, self.rng)
-        # n-ADIM GETIRI (agents/nstep.py). N_STEP=1'de pencere hemen bosalir
-        # ve gamma_n=gamma cikar -> tek adimlik TD ile BIREBIR ayni davranis.
-        self.nstep = NStepAccumulator(N_STEP, GAMMA, SPEC_DQN)
         self.steps = 0
         self.eps_progress: float | None = None   # bkz. eps / set_eps_progress
 
@@ -92,30 +88,18 @@ class DQNAgent:
     # ------------------------------------------------------------- ogrenme
 
     def push(self, *transition):
-        for tr, gamma_n in self.nstep.push(transition):
-            self.buffer.push(*tr, gamma_n=gamma_n)
+        self.buffer.push(*transition)
         self.steps += 1
-
-    def end_episode(self):
-        """Episode sinirinda kalan kisa pencereleri bosalt.
-
-        SART: bir ajanin episode'u KESILME (truncation) ile bitebiliyor ve o
-        durumda done=False geliyor; bosaltilmazsa n-adim penceresi BIR SONRAKI
-        episode'a sizar ve iki ayri episode'un odulleri toplanir."""
-        for tr, gamma_n in self.nstep.flush():
-            self.buffer.push(*tr, gamma_n=gamma_n)
 
     def learn(self) -> float | None:
         if len(self.buffer) < self.learn_start or self.steps % LEARN_EVERY != 0:
             return None
 
-        (obs, action, reward, next_obs, done, next_mask,
-         gamma_n) = self.buffer.sample(self.batch_size)
+        obs, action, reward, next_obs, done, next_mask = self.buffer.sample(self.batch_size)
         t = lambda x, dt=torch.float32: torch.as_tensor(x, dtype=dt, device=self.device)
         obs, next_obs = t(obs), t(next_obs)
         action = t(action, torch.int64)
         reward, done, next_mask = t(reward), t(done), t(next_mask)
-        gamma_n = t(gamma_n)
 
         q = self.online(obs).gather(1, action.unsqueeze(1)).squeeze(1)
 
@@ -126,9 +110,7 @@ class DQNAgent:
             next_q_online = masked_q(self.online(next_obs), next_mask)
             best = next_q_online.argmax(dim=1, keepdim=True)
             next_q = self.target(next_obs).gather(1, best).squeeze(1)
-            # gamma_n = gamma^k, k = gecisin GERCEK ufku (n, ya da episode
-            # sonunda daha kisa) — bkz. agents/nstep.py
-            target = reward + gamma_n * next_q * (1.0 - done)
+            target = reward + GAMMA * next_q * (1.0 - done)
 
         loss = nn.functional.smooth_l1_loss(q, target, beta=HUBER_BETA)
         self.opt.zero_grad()

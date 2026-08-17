@@ -254,15 +254,11 @@ SEED = 0
 # (Phi=1'de bile 2.5x marj). Etkin ufuk 1/(1-gamma) = 5000 adim > 2800 episode.
 GAMMA = 0.9998
 
-# n-ADIM GETIRI — Strike_Mission.md §11.14 / agents/nstep.py
-# 1 = klasik tek adimlik TD (eski davranis, BIREBIR korunur).
-# >1 olunca hedef  sum gamma^k r_{t+k} + gamma^n max Q(s_{t+n})  olur ve
-# bootstrap payi azalir. Olculdu: uzun egitim politikayi bozuyor ve
-# bozulma epsilon DUSERKEN artiyor (yani kesiften degil ogrenmeden) —
-# 1-adim bootstrap'in gamma=0.9998 / 2800 adimda hata biriktirmesi en
-# olasi sebep. Bu knob o hipotezin testi. train.py --n-step ile ezilir.
-N_STEP = 1
-
+# n-ADIM GETIRI DENENDI VE KALDIRILDI (2026-08-17): olculdu, uzun egitim
+# politikayi BOZUYORDU (VDN surv_ratio ep1000 %4.23 -> ep3000 %2.80, QMIX
+# %0.00 -> %0.00) ve bozulma epsilon DUSERKEN artiyordu (kesiften degil
+# ogrenmeden). Kullanilmayan (varsayilan kapali) ve zararli oldugu olculen
+# kod tutulmadi — bkz. git gecmisi (agents/nstep.py).
 GRAD_CLIP = 10.0
 HIDDEN = 128
 # LEARN_EVERY=16 + batch=64 DENENDI VE GERI ALINDI (2026-08-08).
@@ -364,6 +360,21 @@ VDN_EPS_DECAY_STEPS = 2_000_000
 VDN_LEARN_START = 2_000
 VDN_LR = 3e-5
 VDN_TARGET_UPDATE = 4_000
+# DENEY (2026-08-16) DENENDI VE GERI ALINDI: q_mean hicbir egitimde
+# duzlemiyor, surekli artiyor (3.6->19.4 ilk 1000ep, devaminda 24.5'e) ve
+# loss da AYNI YONDE artiyor. Hipotez: VDN_TARGET_UPDATE=4000 HAM ADIM,
+# ortalama episode ~1700-2800 adim surdugu icin target ~1.5-2 EPISODE'DA
+# BIR tam senkron oluyor — bu asiri sik, "sabit hedef" gecikmesini
+# neredeyse sifirliyor sanildi. Sert+seyrek yerine yumusak (Polyak,
+# tau=0.005, her learn() adiminda) denendi — SONUC DAHA KOTU: q_mean DAHA
+# HIZLI firladi (ep625'te 35 vs sertte ep825'te 19), VARIS ep250=90->32,
+# ep500=72->0. NEDEN: tau=0.005'in yari-omru ~139 ogrenme adimi
+# (ln(2)/tau), sert senkronun ORTALAMA bayatligi (~250 adim, senkronlar
+# arasi donuk kalarak) daha bile UZUNDU. Yani "target'e daha cok gecikme
+# ekliyorum" sanip DAHA AZ gecikme eklemis olduk — target hic durmadan
+# online'i kovaliyor, TD regresyonunun ihtiyac duydugu SABIT referans
+# ortadan kalkiyor. Sert senkrona geri donuldu; ıraksama kabul edilip
+# mission_prob-birincil checkpoint secimiyle en iyi nokta yakalaniyor.
 VDN_EVAL_EVERY = 250
 
 # ---------------------------------------------------------------- QMIX (Asama 7)
