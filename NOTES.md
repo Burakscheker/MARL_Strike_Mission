@@ -508,12 +508,30 @@ farkli rejim.)
 Kok: temiz/hizli/keskin ogrenme -> KARAMSAR asiri-temkin deger sabit-noktasina
 daha hizli oturuyor. Cozum yonu: DAHA COK gurultu / anti-yakinsama.
 
-### it14: --vdn-batch 64 (TERS yon — daha cok gurultu)
-Hipotez dogrudan: batch 128->256 zarar verdiyse 128->64 yardim etmeli
-(daha yavas yakinsama, daha cok gradyan gurultusu = pessimism'e oturmayi
-geciktirir). seed 0, exact recipe + --vdn-batch 64, eval-every 10 (erken/
-keskin tepe icin). Watch: config'in "batch 32 kaotikti" uyarisi — 64 cok
-gurultuluyse ep10-20 ziplar.
+### it14 NIHAI: batch 64 de TERS — ic-halka delme (88), pervasiz %20
+batch 128 IKI YONDE de sweet spot: 256 -> asiri-temkin (VARIS %16),
+64 -> pervasiz (ic-halka 88). Her knob dengeyi bozuyor. batch 128 KAL.
+
+### it15 NIHAI: checkpoint ENSEMBLE — BUST (her kombinasyon tek-ckpt'ten KOTU)
+seed 0 fast-eps, --save-all-ckpts, ep5-30 kaydedildi. 100-harita Q-ortalama
+ensemble (scratchpad/eval_ensemble.py, repo'ya dokunmaz):
+| config | team% | VARIS% | mp | timeout% | olu |
+|--------|-------|--------|-----|----------|-----|
+| **TEK ep25** | **70.0** | 80.0 | 0.692 | 34.0 | 0.39 |
+| ens {15,20,25} | 62.0 | 74.0 | 0.626 | 37.0 | 0.48 |
+| ens {20,25,30} | 53.0 | 64.0 | 0.524 | 37.0 | 0.48 |
+
+**SONUC: ensemble ZARARLI.** Snapshot'lar tek kosunun anlik halleri ->
+COK korele; zayif/temkinli snapshot'lari Q-ortalamaya katmak ep25'i asagi
+cekiyor. Bagimsiz tohumlar gerekirdi ama onlar da kotu (seed 1 %27).
+**Tek ep25 fast-eps ckpt = %70 (100 harita, temiz olcum).** Onceki %69
+kaydi 40-harita selector'du; gercek ~%70. Timeout %34 = asil kayip kanali.
+
+### it15b: eps-sweep — ep25 ckpt'yi deploy-time kucuk eps ile eval
+timeout %34 (asiri-temkin) greedy argmax'in kaybi. training-MA %74.7
+eps~0.07 ile. eps in [0,.02,.05,.1] (zar-acik kosuda), rota greedy.
+eps>0 timeout'lari kurtarirsa: stokastik deploy politikasi mesele
+(ama eval.py eps=0 hardcoded, "ruh" sorusu).
 
 
 
