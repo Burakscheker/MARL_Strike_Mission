@@ -624,6 +624,25 @@ fast-eps butcesinde 'guvenli rota'yi ogrenmiyor — Dueling/LayerNorm/batch256
 ile AYNI kader (Q-basligi degisikligi = fast-eps recipe'i bozar).
 **QR-DQN ELENDI.**
 
+### it19: STUCK-TETIKLI BOLTZMANN DEPLOY — %75 (dogrulama bekliyor!)
+scratchpad/eval_stuckescape.py (repo'ya dokunmaz, eval_map_seeds + team_success
+AYNI). Ajan SADECE stall ettiginde (risk-mesafe stuck_n adimdir azalmadi)
+argmax yerine softmax(Q/temp) ornekler; digerlerinde greedy. Elle hedef-arama
+YOK — sadece ogrenilen Q. Rota (niyet) her zaman greedy.
+| config | team% | timeout% | olu |
+|--------|-------|----------|-----|
+| greedy (baseline) | 69-70 | 34 | 0.39 |
+| **stuck_n=150 temp=0.03** | **75.0** | 9 | 0.63 |
+| stuck_n=150 temp=0.06 | 75.0 | 9 | 0.63 |
+| stuck_n=300 temp=0.03-0.10 | 74.0 | 10 | 0.64 |
+
+**MEKANIZMA:** greedy argmax ~25 haritada stall (risk-mesafe azalmayi
+birakiyor, action-gap ~0.03 argmax'in karar veremeyecegi kadar kucuk).
+150 adim ilerlemesizlik -> softmax(Q/0.03) o kucuk gap'i ORNEKLEMEYLE
+degerlendirir -> stall kirilir. Kotu aksiyon (radar, cok -Q) ~secilmez.
+timeout %34->%9, olu sadece 0.39->0.63 (uniform eps'in 1.03'une karsi).
+DOGRULAMA: 5 zar-tohumu ile (team_success stokastik) — ort >=73 ise saglam.
+
 ### it18: TRAIN/EVAL ZORLUK UYUMSUZLUGU (yeni acinim!)
 curriculum_n_radar(ep, 250) frac=0.6 ile: ep25 -> **12 radar**, ep50 -> 15.
 Ama EVAL her zaman 25 radar. **Fast-eps ckpt'i (~ep25, %70) KOLAY 12-radar
