@@ -12,12 +12,22 @@ codex olmadan yapilamaz. "Komut hata verirse donguyu surdurme" kuralin geregi
 throughput KOD degisikligi yapmadim. Bunun yerine bosta GPU'yu ASIL hedefe
 (%75 team_success) yonlendirdim: kod degisikligi YOK, sadece egitim kosulari.
 
-**%75'e ulasilamadi. Ulasilamaz da — mevcut kurulumla.** Kanit:
+**%75'e ulasilamadi.** En iyi: `it1_qmix.pt` = **%33** (100-harita held-out,
+standalone eval). Kanit + teshis:
 - QMIX 500-ep: ep50 %5 -> ep100 %2.5 -> ep150 %0. Coktu.
-- VDN 300-ep (seed 2): ep25 %5 -> ep75..150 %0. Ayni cokus, eps tabana inince toparlamadi.
+- VDN 300-ep (seed 2): ep25 %5 -> ep75..150 %0. Ayni cokus.
 - Tohum taramasi (48-ep, 4 tohum): QMIX s0=%37.5(SANS) s1=%7.5 s3=%10 ;
-  VDN s0=%25(sans) s1=%5 s2=cokus s3=%2.5. Medyan ~%5.
+  VDN s0=%25 s1=%5 s2=cokus s3=%2.5. Medyan ~%5.
+- qmix_s0_96: seed 0'i 48 yerine 96 ep -> ep48'de %5 (48-ep %37.5 idi). Yani
+  %37.5 ogrenilmis DEGIL, eps-takvimi artefakti.
 - MAPPO/HAPPO: %5-7.5, koordinasyon yok (route_overlap 1.0).
+
+**ASIL TESHIS (en degerli cikti):** Sorun NAVIGASYON degil, ROTA GUVENLIGI.
+it1_qmix.pt greedy rotasi 100 haritanin **94'unde hedefe VARIYOR** — ajan
+yolu biliyor. Ama surv_ratio sadece 0.47 (oracle rotasinin yarisi kadar
+guvenli) -> episode basi 1.29 olum -> team %33. %75'e giden yol: rotayi
+oracle guvenligine (surv_ratio ~0.9) yaklastirmak. Bu bir OGRENME
+degisikligi (risk shaping / obs / kredi atama), throughput degil -> codex-kapisi.
 
 **Cokus mekanizmasi** (yeni gozlem, degerli): ~ep50-150 arasi anlamli epsilon'la
 egitim politikayi "urkek"lestiriyor — o kadar risk-kacinan hale geliyor ki
@@ -27,11 +37,24 @@ uyarilan mod. it1'in yuksek sayilari (QMIX %37.5) SADECE 48-ep kosunun eps'i
 ep24'te tabana indirip politikayi cokusten ONCE greedy'ye dondurmesindendi —
 tohuma da bagli, kalici degil.
 
-**En iyi kullanabilir checkpoint'ler** (bu gece uretildi):
-- `runs/ckpt/it1_qmix.pt` — QMIX seed 0, mission_prob 0.408, eval team %37.5 @ ep48
-- `runs/ckpt/it1_vdn.pt`  — VDN seed 0, eval team %25 @ ep24
-Tarihi en iyi hala `runs/ckpt/BEST_vdn_seed2_team45.pt` (%45) ama o ESKI 18-skalar
-obs uzayiyla; simdiki 22-skalar (eylem-ozgu risk) obs ile o sonuc tekrarlanmadi.
+**En iyi kullanabilir checkpoint'ler** (bu gece uretildi) — 100-harita
+STANDALONE `python -m eval.evaluate` (yetkili sayi):
+- `runs/ckpt/it1_qmix.pt` — **team_success %33.0**, VARIS %94, surv_ratio 0.467
+  (medyan 0.512), mission_prob 0.340, olu 1.29/ep, timeout %37.
+- `runs/ckpt/it1_vdn.pt`  — **team_success %27.0**, VARIS %95, surv_ratio 0.356
+  (medyan 0.100 — rotalari QMIX'ten belirgin daha az guvenli), olu 1.49/ep.
+Oracle tavani her ikisi icin %81.5. Tarihi `BEST_vdn_seed2_team45.pt` (%45)
+ESKI 18-skalar obs ile — kiyaslanamaz.
+
+**KRITIK NUANS (yanlis anlasilmasin): "her sey cokuyor" DEGIL.**
+it1_qmix.pt (~ep48) GERCEKTEN ise yarar bir politika: greedy rotasi 100
+haritanin 94'unde hedefe VARIYOR. Sorun rotanin GUVENLIGI (surv_ratio 0.47 =
+oracle'in yarisi kadar guvenli) — ajan yolu biliyor ama zara fazla giriyor,
+episode basi 1.29 olum. Cokme ep48'DEN SONRAKI egitimde oluyor (uzun kosu +
+mid-eps rejimi politikayi asiri urkeklestirip VARIS'i %0'a dusuruyor).
+Yani: erken checkpoint %33, ama "daha cok egit -> daha iyi" YANLIS — tersine
+donuyor. %75'e giden yol "checkpoint'i ep48'de yakala + rota guvenligini
+artir" — ve o ikincisi throughput DEGIL ogrenme degisikligi (codex-kapisi).
 
 **s/ep olcumleri** (it1 probe, 48-ep, n_envs 32, cuda, solo): VDN 10.95, QMIX
 13.34, MAPPO 10.24, HAPPO 10.61. Gercek 500-ep kosu eps takvimi daha uzun oldugu
@@ -52,9 +75,12 @@ saglanmadigi icin DUR kosulu tetiklemedi.)
 python sureci YOK. (Not: 06:45'ten beri idle bir `codex` sureci var — benim
 degil, dokunmadim.)
 
-**3 saatlik pencerede daha fazla egitim kosusu YAPMADIM** bilerek: cokus deseni
-5 kosuda (2 uzun + sweep) net dogrulandi, tekrar re-confirm etmek GPU israfi.
-Elimdeki tam resim bu.
+**Son deneme:** qmix_s0_96 — sans tohumu (s0) 96 ep. Soru: it1'in %37.5 tavani
+daha fazla episode ile asilabilir mi? **CEVAP: HAYIR, tersine.** ep12 %5, ep24
+%0, ep36 %0, ep48 **%5** (it1'in AYNI seed/AYNI kod ep48'i %37.5 idi). Tek fark
+--episodes 48 vs 96 -> eps tabani ep24 vs ep48. Yani %37.5 gercekten SADECE
+48-ep eps takviminin urunu, ogrenilmis bir sey degil. ep48'de kesilip
+oldurdum.
 
 ---
 
