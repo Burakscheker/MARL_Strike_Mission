@@ -222,6 +222,25 @@ YENI YON: fast-eps + ERKEN DURDURMA. Sonraki: (1) it2_vdn_epsfast.pt 100-harita
 authoritative eval, (2) QMIX fast-eps ayni desen mi, (3) kisa kosu (40-48 ep)
 tepeyi temiz yakala.
 
+### >>> it2 ATILIM (2026-08-29 ~13:35) <<<
+`it2_vdn_epsfast.pt` (VDN, `--eps-start 0.1`, ep25 checkpoint) —
+**100-harita STANDALONE eval: team_success %69.0** (onceki en iyi %33 -> 2.1x).
+- surv_ratio ort 0.764, **medyan 1.0000** (rota guvenligi haritalarin yarisinda
+  ORACLE KADAR — it1'de 0.47 idi). olu 0.39/ep (1.29'dan). VARIS %80. timeout %35.
+- Oracle tavani %81.5. Hedef %75'e **6.5 puan**, tavana 12.5 puan.
+
+**Neden ise yaradi:** `--eps-start 0.1` -> egitim boyunca eps ~0.10->0.05 ->
+replay buffer ON-POLICY kaliyor -> deger fonksiyonu GERCEK risk-rotalamayi
+ogreniyor, "her sey tehlikeli"yi degil. Tek CLI bayragi, SIFIR kod degisikligi.
+
+QMIX fast-eps: ep12 %15 -> ep24 %45 -> ep36 %35 (tepe ep24, VDN'den dusuk,
+olu 0.8). VDN net kazanan.
+
+**%75 icin sonraki adimlar:** (a) coklu tohum (s1/s2/s3 — biri daha yuksek
+olabilir, %69 tek tohum), (b) ince eval grid (eval-every 6, ep15-40 arasi
+gercek tepeyi yakala — ep25 ille de tepe degil), (c) drift'i yavaslatmak
+(--eps-end 0.1 sabit-dusuk?).
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**
