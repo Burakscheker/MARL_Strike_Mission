@@ -241,14 +241,17 @@ olabilir, %69 tek tohum), (b) ince eval grid (eval-every 6, ep15-40 arasi
 gercek tepeyi yakala — ep25 ille de tepe degil), (c) drift'i yavaslatmak
 (--eps-end 0.1 sabit-dusuk?).
 
-### it2 push: sweep2 (VDN fast-eps, s0-s3, 48ep, eval-every 8) — 13:39 basladi
-Amac: %69'u gecen (tohum, checkpoint) bul. En iyi mission_prob checkpoint
-otomatik kaydediliyor (it2_vdn_ef_s{0,1,2,3}.pt). Sonra en iyi 1-2'yi
-100-harita authoritative eval et.
+### it2 push: sweep2 GECERSIZDI — `--episodes 48` confound
+`--episodes N` HEM `EPS_FLOOR_FRAC*N` (eps tabani) HEM `curriculum_n_radar(ep, N)`
+(radar rampasi) degistiriyor. 48-ep kosuda ep25'te ~23 radar (250-ep'de ~13),
+eps ep24'te tabanda. sw s0 (48ep) ep16 %10 sonra coktu — %69'u URETMEDI.
+DERS: %69 recipe'i TAM tut: `--episodes 250 --eps-start 0.1`, ep~25 checkpoint.
+
+### it2b: sweep3 — DOGRU recipe (--episodes 250 --eps-start 0.1, eval-every 15), s0-s3
 | seed | en iyi eval team% (ep) | 100-harita | not |
 |------|------------------------|------------|-----|
-| 0 (it2 orijinal) | ep25 %67.5 | **%69.0** | referans |
-| 0 (ince grid) | ... | ... | |
+| 0 (it2 orijinal) | ep25 %67.5 | **%69.0** | referans; sweep3'te ince grid ile tekrar |
+| 0 (it2b) | ... | ... | |
 | 1 | ... | ... | |
 | 2 | ... | ... | |
 | 3 | ... | ... | |
