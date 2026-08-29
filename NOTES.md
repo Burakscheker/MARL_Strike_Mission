@@ -278,6 +278,17 @@ Test: it3_vdn_s0_nounnec (VDN s0 --eps-start 0.1 250ep). Beklenti: rota daha
 kisa -> timeout duser -> VARIS %80->%90, team %69->%73-77.
 | ep | team% | not |
 |----|-------|-----|
+| 15 | 65.0  | it2b ep15 ile BYTE-BYTE AYNI -> R_UNNEC no-op, GERI ALINDI |
+
+### it4 — --max-steps 8000 (SADECE CLI, config.MAX_STEPS 4000'de KALIYOR)
+Gerekce: fast-eps ajaninin ASIL basarisizligi timeout (%35). Rotalari guvenli
+ama 4000 adima sigmiyor. Hafiza: tarihi en iyi (%46) MAX_STEPS=8000 ile geldi.
+Gate 8000'de hala saglaniyor: 2*(-15)+(-110)=-140 <= -50+8000*(-0.01)=-130.
+Test: it4_vdn_s0_ms8k. Kritik: checkpoint HEM 8000 HEM 4000 adimda eval edilecek
+(4000 = gercek benchmark, %69 ile kiyas). KOD DEGISMIYOR — bu senaryo karari
+Burak'in; ben sadece SAYIYI olcuyorum.
+| ep | team% (8000-eval) | not |
+|----|-------------------|-----|
 
 NOT (altyapi dersi): looping bash script TaskStop'a dayanikli degil (loop
 devam edip yeni kosu baslatiyor). Tek-kosu script + oto-kill kullan.
