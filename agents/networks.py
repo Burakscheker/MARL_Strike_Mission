@@ -101,13 +101,25 @@ class CNNQNet(nn.Module):
                  conv_channels: tuple[int, ...] = (16, 32, 32),
                  pool_size: int = 6, hidden: int = HIDDEN,
                  scalar_embed: int = SCALAR_EMBED, dueling: bool = False,
-                 layernorm: bool = False):
+                 layernorm: bool = False, n_quantiles: int = 1):
         super().__init__()
         self.channels = channels
         self.grid_n = grid_n
         self.n_scalars = n_scalars
         self.spatial_size = channels * grid_n * grid_n
         self.dueling = dueling
+        # QR-DQN (Dabney ve ark. 2017, 2026-08-29): n_quantiles>1 ise ag
+        # her aksiyon icin Q SKALARI yerine getiri dagiliminin N KUANTILINI
+        # dondurur. forward() cikisi (B, A, N). n_quantiles=1 -> (B, A),
+        # ESKI mimariyle BIREBIR AYNI (final Linear out_features degismez,
+        # state_dict head.4 ayni sekil). Motivasyon: deger fonksiyonu
+        # stokastik olum cezasi altinda KARAMSAR mean'e cokuyor (it7-it15
+        # pattern) — tum dagilimi ogrenmek daha zengin sinyal, mean cokmesine
+        # daha dayanikli, ustelik risk-farkinda aksiyon secimi (yuksek
+        # kuantil = iyimser) mumkun.
+        self.n_quantiles = n_quantiles
+        self.n_actions = n_actions
+        head_out = n_actions * n_quantiles
 
         layers = []
         in_c = channels
@@ -147,7 +159,7 @@ class CNNQNet(nn.Module):
                 # + n_scalars: ham skalar skip baglantisi (dx/dy -> Q dogrudan yol)
                 nn.Linear(in_head, hidden), *_ln(hidden), nn.ReLU(),
                 nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(),
-                nn.Linear(hidden, n_actions),
+                nn.Linear(hidden, head_out),
             )
         else:
             # DUELING (Wang ve ark. 2016, 2026-08-26 dis inceleme onerisi):
@@ -163,9 +175,9 @@ class CNNQNet(nn.Module):
             # V'yi degistirirken A'nin OGRENDIGI SIRALAMAYI ezmesi zorlasir.
             self.trunk = nn.Sequential(nn.Linear(in_head, hidden), *_ln(hidden), nn.ReLU())
             self.value_head = nn.Sequential(
-                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, 1))
+                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, n_quantiles))
             self.adv_head = nn.Sequential(
-                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, n_actions))
+                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, head_out))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         spatial = x[:, :self.spatial_size].view(-1, self.channels, self.grid_n, self.grid_n)
@@ -173,16 +185,22 @@ class CNNQNet(nn.Module):
         h = self.conv(spatial)
         h = self.pool(h).flatten(1)
         h = torch.cat([h, self.scalar_enc(scalars), scalars], dim=1)
+        nq = self.n_quantiles
         if not self.dueling:
-            return self.head(h)
+            out = self.head(h)
+            return out if nq == 1 else out.view(-1, self.n_actions, nq)
         h = self.trunk(h)
-        v = self.value_head(h)
-        a = self.adv_head(h)
-        return v + (a - a.mean(dim=1, keepdim=True))
+        if nq == 1:
+            v = self.value_head(h)                       # (B, 1)
+            a = self.adv_head(h)                         # (B, A)
+            return v + (a - a.mean(dim=1, keepdim=True))
+        v = self.value_head(h).view(-1, 1, nq)           # (B, 1, N)
+        a = self.adv_head(h).view(-1, self.n_actions, nq)  # (B, A, N)
+        return v + (a - a.mean(dim=1, keepdim=True))     # (B, A, N)
 
 
 def build_qnet(n_actions: int = N_ACTIONS, dueling: bool = False,
-               layernorm: bool = False) -> nn.Module:
+               layernorm: bool = False, n_quantiles: int = 1) -> nn.Module:
     """Butun ajanlarin (DQN/IQL/VDN/QMIX) kullandigi TEK fabrika.
 
     grid_n=PATCH_SIZE (GRID_N DEGIL): env.observe() artik tam gridi degil
@@ -194,7 +212,7 @@ def build_qnet(n_actions: int = N_ACTIONS, dueling: bool = False,
     """
     return CNNQNet(OBS_CHANNELS, PATCH_SIZE, N_SCALARS, n_actions,
                    conv_channels=CNN_CHANNELS, pool_size=CNN_POOL_SIZE,
-                   dueling=dueling, layernorm=layernorm)
+                   dueling=dueling, layernorm=layernorm, n_quantiles=n_quantiles)
 
 
 NEG_INF = -1e9      # -inf yerine: maskeli softmax/max'ta NaN uretmez
@@ -205,5 +223,10 @@ def masked_q(q: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
     Gercek -inf kullanmiyoruz: terminal gecislerde tum aksiyonlar maskeliyse
     -inf * 0 = NaN cikar ve gradyan sessizce bozulur.
+
+    q 2B (B, A) veya QR-DQN'de 3B (B, A, N_quantile) olabilir — 3B'de maske
+    aksiyon ekseninde (dim 1) uygulanir, kuantil eksenine yayilir.
     """
+    if q.dim() == 3:
+        return q.masked_fill((mask <= 0).unsqueeze(-1), NEG_INF)
     return q.masked_fill(mask <= 0, NEG_INF)

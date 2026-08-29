@@ -513,6 +513,28 @@ AL_ALPHA_DEFAULT = 0.9
 MUNCHAUSEN_ALPHA = 0.9
 MUNCHAUSEN_CLIP = -1.0
 
+# QR-DQN (Quantile Regression DQN, Dabney ve ark. 2017) — 2026-08-29, it7-it15
+# "deeper RL" denemelerinin HEPSI %70'i gecemedikten sonra son ciddi bahis.
+# Ortak pattern: deger fonksiyonu STOKASTIK OLUM CEZASI altinda KARAMSAR bir
+# mean sabit-noktasina cokuyor (asiri-temkin, VARIS %95->%42). AL/Munchausen/
+# LayerNorm/batch mudahaleleri "hedefe var + guvende kal" dengesini bozdu.
+#
+# QR-DQN Q(s,a) SKALARI yerine getiri dagiliminin N KUANTILINI (theta_1..N)
+# ogrenir. Kuantil Huber kaybi. Neden yardim edebilir:
+#  1) Tum dagilimi ogrenmek DAHA ZENGIN sinyal — mean cokmesine daha dayanikli
+#     (Bellemare/Dabney distributional RL literaturu, ampirik stabilite).
+#  2) IYIMSER AKSIYON SECIMI: argmax(mean) yerine argmax(mean + k*std) —
+#     dagilimin ust ucu = "iyi giderse" senaryosu. Karamsar cokmeye DOGRUDAN
+#     karsi (--qr-optimism k). k=0 -> risk-notr duz mean.
+# VDN toplami KOMONOTON (Z_tot kuantilleri = Z_1 + Z_2 kuantilleri; QR-MIX
+# yaklasimi, VDN ayristirmasini korur).
+#
+# --quantiles 1 (varsayilan) -> skaler, learn() BIREBIR eski. --quantiles 16
+# --qr-optimism 0.5 tipik ilk deneme. Final Linear out_features n_actions*N
+# oldugu icin checkpoint uyumsuz -> sifirdan (fast-eps zaten sifirdan).
+QR_QUANTILES_DEFAULT = 16
+QR_OPTIMISM_DEFAULT = 0.5
+
 # OGRETMEN-CAPASI (teacher-anchored VDN, 2026-08-26, dis inceleme onerisi):
 # vanilla BC->TD fine-tune (train_bc.py cikisindan --resume-from ile devam)
 # COKTU — 25 episode'da mission_prob 0.0001'e dustu (BC-oncesi: %42 takim,

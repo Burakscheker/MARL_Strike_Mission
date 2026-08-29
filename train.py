@@ -59,7 +59,8 @@ def build_agent(algo: str, seed: int, device: str, lr: float = None,
                 eps_end: float = None, dueling: bool = False,
                 prioritized: bool = False, al_alpha: float = 0.0,
                 munchausen_tau: float = 0.0, layernorm: bool = False,
-                vdn_batch: int = None, vdn_target_update: int = None):
+                vdn_batch: int = None, vdn_target_update: int = None,
+                n_quantiles: int = 1, qr_optimism: float = 0.0):
     if algo == "vdn":
         return VDNAgent(seed=seed, device=device,
                          lr=lr if lr is not None else C.VDN_LR,
@@ -69,7 +70,8 @@ def build_agent(algo: str, seed: int, device: str, lr: float = None,
                          layernorm=layernorm,
                          batch_size=vdn_batch if vdn_batch is not None else C.VDN_BATCH,
                          target_update=(vdn_target_update if vdn_target_update
-                                        is not None else C.VDN_TARGET_UPDATE))
+                                        is not None else C.VDN_TARGET_UPDATE),
+                         n_quantiles=n_quantiles, qr_optimism=qr_optimism)
     if algo == "qmix":
         return QMixAgent(seed=seed, device=device,
                           lr=lr if lr is not None else C.QMIX_LR)
@@ -601,6 +603,19 @@ def main():
                          "(varsayilan C.VDN_TARGET_UPDATE=4000). YAVAS yon "
                          "DENENMEDI (soft/Polyak denenip elenmisti) — daha "
                          "kararli regresyon hedefi = daha az kaotik ogrenme.")
+    ap.add_argument("--quantiles", type=int, default=None,
+                    help="SADECE vdn: QR-DQN (Dabney ve ark. 2017) — Q skalari "
+                         "yerine getiri dagiliminin N kuantilini ogrenir. "
+                         "Varsayilan 1 (skaler, eski davranis BIREBIR). Tipik "
+                         "8-32. Motiv: deger fonksiyonu stokastik olum cezasi "
+                         "altinda karamsar mean'e cokuyor; tum dagilim daha "
+                         "dayanikli + iyimser aksiyon secimi mumkun (--qr-optimism). "
+                         ">1 ise --al-alpha / --munchausen-tau YOK SAYILIR.")
+    ap.add_argument("--qr-optimism", type=float, default=None,
+                    help="SADECE vdn + --quantiles>1: aksiyon secerken mean "
+                         "yerine mean + k*std kullan (getiri dagiliminin ust ucu "
+                         "= iyimser -> karamsar cokmeye karsi). 0.0 = risk-notr "
+                         "(duz mean). Tipik 0.3-1.0. Egitim ve eval'de kullanilir.")
     ap.add_argument("--save-all-ckpts", action="store_true",
                     help="Her eval'da ayri checkpoint kaydet ({tag}_ep{N}.pt) — "
                          "deploy-time Q-ortalama ensemble icin (fast-eps'te her "
@@ -656,14 +671,19 @@ def main():
                            risk_shaping=not args.no_risk_shaping)
     al_alpha = args.al_alpha if args.al_alpha is not None else 0.0
     munchausen_tau = args.munchausen_tau if args.munchausen_tau is not None else 0.0
-    if munchausen_tau > 0.0:
+    n_quantiles = args.quantiles if args.quantiles is not None else 1
+    qr_optimism = args.qr_optimism if args.qr_optimism is not None else 0.0
+    if n_quantiles > 1:
+        al_alpha = 0.0; munchausen_tau = 0.0   # QR-DQN bu ikisiyle birlesmez
+    elif munchausen_tau > 0.0:
         al_alpha = 0.0   # Munchausen AL'i kapsar; ikisi birden anlamsiz
     agent = build_agent(algo, args.seed, args.device, lr=args.lr,
                         eps_end=args.eps_end, dueling=args.dueling,
                         prioritized=args.prioritized, al_alpha=al_alpha,
                         munchausen_tau=munchausen_tau, layernorm=args.layernorm,
                         vdn_batch=args.vdn_batch,
-                        vdn_target_update=args.vdn_target_update)
+                        vdn_target_update=args.vdn_target_update,
+                        n_quantiles=n_quantiles, qr_optimism=qr_optimism)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -721,7 +741,8 @@ def main():
         def q_stats():
             net = agent.online[C.AGENT_1]
             with _torch.no_grad():
-                q = net(PROBE)[:, :4]
+                out = net(PROBE)
+                q = (out.mean(-1) if out.dim() == 3 else out)[:, :4]  # QR: kuantil ort.
             t2 = q.topk(2, dim=1).values
             return float(q.mean()), float((t2[:, 0] - t2[:, 1]).mean())
     # EPISODE BASINA ham kayit — grafikte hem ham nokta hem hareketli ortalama
@@ -792,6 +813,9 @@ def main():
         print("LayerNorm acik: Q-agi gizli katmanlari normalize (Q-iraksama karsiti)")
     if algo == "vdn" and (args.vdn_batch or args.vdn_target_update):
         print(f"VDN override: batch={agent.batch_size}  target_update={agent.target_update}")
+    if algo == "vdn" and n_quantiles > 1:
+        print(f"QR-DQN acik: {n_quantiles} kuantil, optimism={qr_optimism} "
+              f"(getiri dagilimi ogrenilir; iyimser aksiyon secimi)")
 
     t_start = time.perf_counter()
     best = -1.0   # mission_prob

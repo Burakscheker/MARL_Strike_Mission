@@ -187,7 +187,8 @@ class VDNAgent:
                  target_update: int = VDN_TARGET_UPDATE,
                  eps_end: float = EPS_END, dueling: bool = False,
                  prioritized: bool = False, al_alpha: float = 0.0,
-                 munchausen_tau: float = 0.0, layernorm: bool = False):
+                 munchausen_tau: float = 0.0, layernorm: bool = False,
+                 n_quantiles: int = 1, qr_optimism: float = 0.0):
         self.device = torch.device(device)
         self.n_actions = n_actions
         torch.manual_seed(seed)
@@ -211,7 +212,18 @@ class VDNAgent:
         # 0.0 = kapali. >0 ise AL'in YERINE gecer (Munchausen zaten AL'i kapsar).
         self.munchausen_tau = float(munchausen_tau)
 
-        _qkw = dict(dueling=dueling, layernorm=layernorm)
+        # QR-DQN (bkz. config.py QR_QUANTILES + learn()). n_quantiles=1 ->
+        # skaler Q, eski davranis BIREBIR. qr_optimism: aksiyon secerken
+        # mean yerine mean + qr_optimism*std (dagilimin ust ucu = iyimser,
+        # KARAMSAR mean cokmesine karsi). 0.0 = duz mean (risk-notr).
+        self.n_quantiles = int(n_quantiles)
+        self.qr_optimism = float(qr_optimism)
+        if self.n_quantiles > 1:
+            # kuantil orta noktalari tau_i = (i+0.5)/N, i=0..N-1
+            self._tau = torch.arange(self.n_quantiles, device=self.device
+                                     ).float().add(0.5).div(self.n_quantiles)
+
+        _qkw = dict(dueling=dueling, layernorm=layernorm, n_quantiles=n_quantiles)
         self.online = {AGENT_1: build_qnet(n_actions, **_qkw).to(self.device),
                        AGENT_2: build_qnet(n_actions, **_qkw).to(self.device)}
         self.target = {AGENT_1: build_qnet(n_actions, **_qkw).to(self.device),
@@ -256,6 +268,17 @@ class VDNAgent:
         kabul edilir, cunku oncelikler henuz guvenilir degildir)."""
         self.per_beta = min(1.0, max(0.0, beta))
 
+    def _scores(self, out: torch.Tensor) -> torch.Tensor:
+        """Ag cikisindan (2B skaler ya da 3B kuantil) aksiyon-secim skorlari
+        (B, A). QR-DQN'de: mean + qr_optimism*std (dagilimin ust ucu = iyimser
+        aksiyon secimi, karamsar mean cokmesine karsi). Skaler modda no-op."""
+        if out.dim() != 3:
+            return out
+        mean = out.mean(dim=-1)
+        if self.qr_optimism == 0.0:
+            return mean
+        return mean + self.qr_optimism * out.std(dim=-1)
+
     def act(self, agent_id: int, obs: np.ndarray, mask: np.ndarray,
            eps: float | None = None) -> int:
         eps = self.eps if eps is None else eps
@@ -267,7 +290,7 @@ class VDNAgent:
         with torch.no_grad():
             o = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
             m = torch.as_tensor(mask, dtype=torch.float32, device=self.device).unsqueeze(0)
-            q = masked_q(self.online[agent_id](o), m)
+            q = masked_q(self._scores(self.online[agent_id](o)), m)
             return int(q.argmax(dim=1).item())
 
     def act_batch(self, agent_id: int, obs: np.ndarray, mask: np.ndarray,
@@ -280,7 +303,7 @@ class VDNAgent:
         with torch.no_grad():
             o = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
             m = torch.as_tensor(mask, dtype=torch.float32, device=self.device)
-            q = masked_q(self.online[agent_id](o), m)
+            q = masked_q(self._scores(self.online[agent_id](o)), m)
             greedy = q.argmax(dim=1).cpu().numpy()
         if eps <= 0.0:
             return greedy
@@ -298,7 +321,10 @@ class VDNAgent:
         Q(obs_2, NOOP) FAZ A boyunca SABIT KALMAMALI (golge NOOP'un kaniti)."""
         with torch.no_grad():
             o = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-            return float(self.online[agent_id](o)[0, action].item())
+            out = self.online[agent_id](o)
+            if out.dim() == 3:            # QR-DQN: kuantil ortalamasi
+                return float(out[0, action].mean().item())
+            return float(out[0, action].item())
 
     # ------------------------------------------------------------- ogrenme
 
@@ -346,6 +372,63 @@ class VDNAgent:
         sv2 = soft_v(self.target[AGENT_2], next_obs2, nm2)
         return r + m_bonus + GAMMA * (sv1 + sv2) * (1.0 - done)
 
+    def _quantile_huber(self, z_tot, Tz):
+        """Kuantil Huber kaybi (Dabney ve ark. 2017). z_tot (B,Nq) tahmin,
+        Tz (B,Nq) hedef kuantilleri. Doner: (B,) ornek basi kayip.
+            u[b,i,j] = Tz[b,j] - z_tot[b,i]
+            rho = |tau_i - 1[u<0]| * L_huber(u) / kappa   (kappa=HUBER_BETA)
+        j (hedef) uzerinden TOPLA, i (tahmin) uzerinden ORTALA."""
+        u = Tz.unsqueeze(1) - z_tot.unsqueeze(2)          # (B, Nq_pred, Nq_tgt)
+        ab = u.abs()
+        huber = torch.where(ab <= HUBER_BETA, 0.5 * u * u,
+                            HUBER_BETA * (ab - 0.5 * HUBER_BETA))
+        w = (self._tau.view(1, -1, 1) - (u.detach() < 0).float()).abs()
+        return (w * huber / HUBER_BETA).sum(dim=2).mean(dim=1)
+
+    def _learn_qr(self, obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
+                  nm1, nm2, per, per_idx, is_w, t):
+        """QR-DQN ogrenme adimi (bkz. config.py QR_QUANTILES). VDN toplami
+        KOMONOTON: Z_tot kuantilleri = Z_1 kuantilleri + Z_2 kuantilleri
+        (QR-MIX yaklasimi — iki ajanin getirisi tam rank-korele varsayilir,
+        VDN ayristirmasini korur). AL/Munchausen/BC bu yolda YOK (opt-in
+        bayraklarla birlestirilmez)."""
+        Nq = self.n_quantiles
+        z1_all = self.online[AGENT_1](obs1)               # (B, A, Nq)
+        z2_all = self.online[AGENT_2](obs2)
+        i1 = a1.view(-1, 1, 1).expand(-1, 1, Nq)
+        i2 = a2.view(-1, 1, 1).expand(-1, 1, Nq)
+        z_tot = z1_all.gather(1, i1).squeeze(1) + z2_all.gather(1, i2).squeeze(1)  # (B, Nq)
+
+        with torch.no_grad():
+            # Double-DQN: aksiyon secimi ONLINE agin BEKLENEN Q'suyla
+            best1 = masked_q(self.online[AGENT_1](next_obs1).mean(-1), nm1).argmax(1)
+            best2 = masked_q(self.online[AGENT_2](next_obs2).mean(-1), nm2).argmax(1)
+            b1 = best1.view(-1, 1, 1).expand(-1, 1, Nq)
+            b2 = best2.view(-1, 1, 1).expand(-1, 1, Nq)
+            tz1 = self.target[AGENT_1](next_obs1).gather(1, b1).squeeze(1)   # (B, Nq)
+            tz2 = self.target[AGENT_2](next_obs2).gather(1, b2).squeeze(1)
+            Tz = r.unsqueeze(1) + GAMMA * (tz1 + tz2) * (1.0 - done).unsqueeze(1)
+
+        ql = self._quantile_huber(z_tot, Tz)             # (B,)
+        loss = (ql * t(is_w)).mean() if per else ql.mean()
+
+        self.opt.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(
+            list(self.online[AGENT_1].parameters()) + list(self.online[AGENT_2].parameters()),
+            GRAD_CLIP)
+        self.opt.step()
+
+        if per:
+            with torch.no_grad():
+                new_td = (z_tot.mean(1) - Tz.mean(1)).abs().cpu().numpy()
+            self.buffer.update_priorities(per_idx, new_td)
+
+        if self.steps % self.target_update == 0:
+            self.target[AGENT_1].load_state_dict(self.online[AGENT_1].state_dict())
+            self.target[AGENT_2].load_state_dict(self.online[AGENT_2].state_dict())
+        return float(loss.item())
+
     def learn(self) -> float | None:
         if len(self.buffer) < self.learn_start or self.steps % LEARN_EVERY != 0:
             return None
@@ -364,6 +447,11 @@ class VDNAgent:
         a1, a2 = t(a1, torch.int64), t(a2, torch.int64)
         r, done = t(r), t(done)
         nm1, nm2 = t(nm1), t(nm2)
+
+        if self.n_quantiles > 1:
+            return self._learn_qr(obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
+                                  nm1, nm2, per, per_idx if per else None,
+                                  is_w if per else None, t)
 
         q1_all = self.online[AGENT_1](obs1)
         q2_all = self.online[AGENT_2](obs2)
