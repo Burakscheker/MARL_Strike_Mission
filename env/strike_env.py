@@ -140,7 +140,11 @@ class StrikeMissionEnv:
         else:
             self.alert[:] = 0
 
-        # SHAPING OLCEGI — harita basina, max_man DEGIL.
+        # DIST_SCALE — SADECE gozlem skalari #11 icin (shaping ARTIK ham
+        # Manhattan kullaniyor, bkz. _phi it6 notu). Skalar #11 hala risk-
+        # farkinda: "hedefe risk dahil ne kadar var". Asagidaki tarihsel not
+        # o skalarin neden max_man yerine dist_scale ile normalize edildigini
+        # anlatir (shaping icin de gecerliydi, artik degil):
         # BUG (bulundu ve duzeltildi): Phi ve gozlem skalari #11 eskiden
         # `min(1, dist/max_man)` ile normalize ediliyordu, max_man = 2(n-1) =
         # 1998. Ama self.dist RISK-mesafesi: bir ic halkaya girmek
@@ -395,12 +399,22 @@ class StrikeMissionEnv:
 
     def _phi(self, agent: int) -> float:
         """Potential-based shaping potansiyeli: 1 = hedefte, 0 = en uzak.
-        RISK-FARKINDA mesafeden (Manhattan degil) — yani "hedefe yaklasmak"
-        radardan gecerek yaklasmayi ODULLENDIRMEZ.
 
-        Olcek self.dist_scale (harita basina, bkz. reset()); max_man ile
-        normalize etmek yogun haritalarda Phi'yi 0'a kilitliyordu."""
-        return 1.0 - min(1.0, float(self.dist[self.pos[agent]]) / self.dist_scale)
+        it6 (2026-08-29, euzxx parent tasarimi): HAM Manhattan mesafesi,
+        risk-farkinda self.dist DEGIL. Gerekce — §11.12 zaten "ajan takiliyor,
+        hedefe dogru ilerleyip bir noktada duruyor" demis; risk-farkinda dist
+        ile shaping "ilerleme" + "riskten kacinma"yi TEK sinyalde birlestiriyor
+        ve yogun radar kumesi yaninda dist buyuk/kafa karistirici oluyordu.
+        Ham Manhattan ile Phi hedefe dogru HER ZAMAN monoton artar (net
+        "bu yone git"). Risk AYRI ceza terimi olarak kaliyor (R_RISK_COEF*p);
+        euzxx bunlari bilerek ayirir, iki sinyal net'te birbirini dengeler.
+        Gozlem skalari #11 hala risk-farkinda (dist_scale) — SADECE shaping
+        degisti. max_man normalizasyonu ham Manhattan icin DOGRU: man(B)=max_man
+        tam olarak, yani Phi(B)=0; risk-dist'in max_man'i asma sorunu YOK.
+        ESKI: 1.0 - min(1.0, self.dist[pos] / self.dist_scale)"""
+        r, c = self.pos[agent]
+        man = abs(r - self.goal[0]) + abs(c - self.goal[1])
+        return 1.0 - min(1.0, man / self.max_man)
 
     def step(self, actions) -> tuple[dict[int, np.ndarray], float, bool, dict]:
         if self.done:
