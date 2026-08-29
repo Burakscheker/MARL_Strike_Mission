@@ -601,6 +601,10 @@ def main():
                          "(varsayilan C.VDN_TARGET_UPDATE=4000). YAVAS yon "
                          "DENENMEDI (soft/Polyak denenip elenmisti) — daha "
                          "kararli regresyon hedefi = daha az kaotik ogrenme.")
+    ap.add_argument("--save-all-ckpts", action="store_true",
+                    help="Her eval'da ayri checkpoint kaydet ({tag}_ep{N}.pt) — "
+                         "deploy-time Q-ortalama ensemble icin (fast-eps'te her "
+                         "ckpt ~%%65 ama farkli haritalarda hata yapar).")
     ap.add_argument("--layernorm", action="store_true",
                     help="SADECE vdn: Q-agi gizli katmanlarindan sonra LayerNorm "
                          "(BroNet/CrossQ, plasticity-loss literaturu). Belgeli "
@@ -895,6 +899,12 @@ def main():
                 best = score
                 save(agent, algo, stem)
             save(agent, algo, stem + "_last")
+            # --save-all-ckpts: HER eval'da ayri kaydet (deploy-time ensemble
+            # icin). fast-eps rejiminde her ckpt ~%60-68 ama FARKLI haritalarda
+            # hata yapiyor -> Q-ortalama ensemble varyansi azaltir (post-hoc,
+            # egitim dengesini bozamaz).
+            if args.save_all_ckpts:
+                save(agent, algo, f"{stem}_ep{ep}")
 
     log_f.close()
     dense_f.close()
