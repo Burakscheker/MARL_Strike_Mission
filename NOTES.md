@@ -417,6 +417,43 @@ asiri-temkin drifti. AL kodu KALIYOR (bayrak-arkasi, zararsiz, gap probu
 icin faydali arac). Sonraki: Munchausen (AL + entropi) — entropi terimi
 politikanin rijit-temkin bir stratejiye COKMESINE direnir.
 
+### it9 NIHAI: Munchausen tau=0.02 — it8'den DE KOTU (tepe ~%40 @ ep30, dusuyor)
+| ep | eval takim% | VARIS% | olu | adim | q_mean/q_gap (dense) |
+|----|-------------|--------|-----|------|----------------------|
+| 15 | 32.5 | 55.0 | 0.88 | 2969 | — |
+| 25 | (MA %64) | — | 1.04 | 1740 | q_mean 1.02, q_gap 0.029 |
+| 30 | 40.0 | 47.5 | 0.62 | 3236 | — |
+
+**SONUC: entropi yontemi eval-argmax ile UYUMSUZ.** tau=0.02 Q'yu SISIRMEDI
+(q_mean 1.02 ~ it2'nin 1.17) ama q_gap'i de acmadi (0.029 ~ it2'nin 0.033) —
+tau bu is icin cok kucuk. Training MA guclu (%64 > it2 %48) cunku Munchausen
+STOKASTIK bir politika egitiyor ve o training'de iyi. Ama EVAL argmax aliyor,
+ve entropi terimi Q-manzarasini DUZLESTIRIYOR -> argmax daha KOTU. AL ve
+Munchausen ZIT sebeplerden basarisiz: AL gap acar (kararli ama temkinli
+argmax), Munchausen gap kapatir (stokastik politika, kotu argmax). Kod
+KALIYOR (bayrak-arkasi). tau'yu buyutmek (0.05-0.1) argmax'i daha da
+bozardi — bu yol kapali.
+
+### it10 NIHAI: VANILLA fast-eps + INCE eval — GIZLI TEPE YOK (NULL sonuc)
+ep25 dense BYTE-BYTE it2 ile AYNI (GPU determinizmi -> it10 == it2). Evaller:
+ep10 %36 (VARIS %98, olu 1.28) / ep20 **%64** / ep30 %44 (VARIS %60, drift).
+Tepe ep20-25, ~%64-68. it2'nin kaba ep25/50/75 grid'i GERCEK tepeyi kacirmadi.
+**Fast-eps tavani ~%67-69, drift ~ep25'te basliyor — kesin.** Ince grid bir
+sey degistirmedi.
+
+### it11: LayerNorm Q-agi (BroNet/CrossQ) — KOD DEGISIKLIGI (--layernorm)
+Gerekce: belgeli Q-IRAKSAMASI (config.py §11.14: q_mean 17->37, hic
+duzlesmiyor) sustained TD'de argmax politikasini bozuyor — fast-eps ~ep25'te
+yakalayip DURUYOR ama cozmuyor. Her gizli Linear'dan SONRA (ReLU'dan ONCE)
+LayerNorm -> aktivasyon dagilimi sabit -> son Linear girdisi sinirli -> Q
+buyumesi durur. `agents/networks.py` `layernorm` bayragi (state_dict head.0/2/4
+DEGISMEZ, eski ckpt yuklenir; --layernorm ile head.1/3 LN eklenir, sifirdan).
+AL/Munchausen'den FARKLI: TD hedefine DOKUNMAZ, sadece mimari — Q'yu manzarayi
+DUZLESTIRMEDEN (Munchausen sorunu) veya asagi CEKMEDEN (AL sorunu) sinirlar.
+Beklenti: q_mean ~1-3'te kalir (it2: 1.17->2.15->2.66->...), eval ep25 SONRASI
+COKMEZ -> daha gec/yuksek tepe. Watch: q_mean dense'te patlarsa veya ep15/30
+it7-dueling gibi cok geride ise kill.
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**

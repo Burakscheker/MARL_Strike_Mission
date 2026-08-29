@@ -100,7 +100,8 @@ class CNNQNet(nn.Module):
     def __init__(self, channels: int, grid_n: int, n_scalars: int, n_actions: int,
                  conv_channels: tuple[int, ...] = (16, 32, 32),
                  pool_size: int = 6, hidden: int = HIDDEN,
-                 scalar_embed: int = SCALAR_EMBED, dueling: bool = False):
+                 scalar_embed: int = SCALAR_EMBED, dueling: bool = False,
+                 layernorm: bool = False):
         super().__init__()
         self.channels = channels
         self.grid_n = grid_n
@@ -122,13 +123,30 @@ class CNNQNet(nn.Module):
             nn.Linear(scalar_embed, scalar_embed), nn.ReLU(),
         )
 
+        # LAYERNORM (2026-08-29, saf RL denemesi — AL/Munchausen elendikten
+        # sonra). Motivasyon: config.py §11.14 belgeli Q-IRAKSAMASI (q_mean
+        # 17->37 uzun egitimde, hic duzlesmiyor) — sustained TD guncellemesi
+        # Q'yu buyutuyor, argmax politikasi bozuluyor (fast-eps bunu ~ep25'te
+        # yakalayip DURUYOR, cozmuyor). Her gizli katman sonrasi (Linear'dan
+        # SONRA, ReLU'dan ONCE) LayerNorm aktivasyon dagilimini sabit tutar
+        # -> son Linear'in girdisi sinirli -> Q buyumesi yavaslar/durur
+        # (BroNet, Nauman ve ark. 2024; CrossQ; plasticity-loss literaturu).
+        # layernorm=False (varsayilan) -> ESKI mimariyle BIREBIR AYNI
+        # (state_dict anahtarlari head.0/2/4 degismez). Checkpoint uyumsuz
+        # oldugu icin --layernorm ile SIFIRDAN egitim gerekir (fast-eps zaten
+        # sifirdan).
+        self.layernorm = layernorm
+
+        def _ln(n):
+            return [nn.LayerNorm(n)] if layernorm else []
+
         flat_dim = in_c * pool_size * pool_size
         in_head = flat_dim + scalar_embed + n_scalars
         if not dueling:
             self.head = nn.Sequential(
                 # + n_scalars: ham skalar skip baglantisi (dx/dy -> Q dogrudan yol)
-                nn.Linear(in_head, hidden), nn.ReLU(),
-                nn.Linear(hidden, hidden), nn.ReLU(),
+                nn.Linear(in_head, hidden), *_ln(hidden), nn.ReLU(),
+                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(),
                 nn.Linear(hidden, n_actions),
             )
         else:
@@ -143,11 +161,11 @@ class CNNQNet(nn.Module):
             # dallara boler; Q(s,a)=V(s)+(A(s,a)-mean_a A(s,a)) — olcek (V)
             # ve siralama (A) MIMARI OLARAK ayristigi icin TD guncellemesi
             # V'yi degistirirken A'nin OGRENDIGI SIRALAMAYI ezmesi zorlasir.
-            self.trunk = nn.Sequential(nn.Linear(in_head, hidden), nn.ReLU())
+            self.trunk = nn.Sequential(nn.Linear(in_head, hidden), *_ln(hidden), nn.ReLU())
             self.value_head = nn.Sequential(
-                nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, 1))
+                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, 1))
             self.adv_head = nn.Sequential(
-                nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, n_actions))
+                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, n_actions))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         spatial = x[:, :self.spatial_size].view(-1, self.channels, self.grid_n, self.grid_n)
@@ -163,19 +181,20 @@ class CNNQNet(nn.Module):
         return v + (a - a.mean(dim=1, keepdim=True))
 
 
-def build_qnet(n_actions: int = N_ACTIONS, dueling: bool = False) -> nn.Module:
+def build_qnet(n_actions: int = N_ACTIONS, dueling: bool = False,
+               layernorm: bool = False) -> nn.Module:
     """Butun ajanlarin (DQN/IQL/VDN/QMIX) kullandigi TEK fabrika.
 
     grid_n=PATCH_SIZE (GRID_N DEGIL): env.observe() artik tam gridi degil
     ajanin YEREL penceresini donduruyor (bkz. config.py OBS_CHANNELS notu),
     ag da o pencere boyutuna gore sekilleniyor.
 
-    dueling=False (varsayilan): ESKI mimariyle BIREBIR ayni (parametre
-    isimleri dahil) — mevcut checkpoint'ler etkilenmez.
+    dueling=False + layernorm=False (varsayilan): ESKI mimariyle BIREBIR ayni
+    (parametre isimleri dahil) — mevcut checkpoint'ler etkilenmez.
     """
     return CNNQNet(OBS_CHANNELS, PATCH_SIZE, N_SCALARS, n_actions,
                    conv_channels=CNN_CHANNELS, pool_size=CNN_POOL_SIZE,
-                   dueling=dueling)
+                   dueling=dueling, layernorm=layernorm)
 
 
 NEG_INF = -1e9      # -inf yerine: maskeli softmax/max'ta NaN uretmez

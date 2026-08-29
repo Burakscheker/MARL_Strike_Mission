@@ -58,13 +58,14 @@ RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
 def build_agent(algo: str, seed: int, device: str, lr: float = None,
                 eps_end: float = None, dueling: bool = False,
                 prioritized: bool = False, al_alpha: float = 0.0,
-                munchausen_tau: float = 0.0):
+                munchausen_tau: float = 0.0, layernorm: bool = False):
     if algo == "vdn":
         return VDNAgent(seed=seed, device=device,
                          lr=lr if lr is not None else C.VDN_LR,
                          eps_end=eps_end if eps_end is not None else C.EPS_END,
                          dueling=dueling, prioritized=prioritized,
-                         al_alpha=al_alpha, munchausen_tau=munchausen_tau)
+                         al_alpha=al_alpha, munchausen_tau=munchausen_tau,
+                         layernorm=layernorm)
     if algo == "qmix":
         return QMixAgent(seed=seed, device=device,
                           lr=lr if lr is not None else C.QMIX_LR)
@@ -577,6 +578,14 @@ def main():
                          "cokmesine direnir. Varsayilan KAPALI (0.0); tipik "
                          "0.03. >0 ise --al-alpha yok sayilir. Bkz. config.py "
                          "MUNCHAUSEN_ALPHA.")
+    ap.add_argument("--layernorm", action="store_true",
+                    help="SADECE vdn: Q-agi gizli katmanlarindan sonra LayerNorm "
+                         "(BroNet/CrossQ, plasticity-loss literaturu). Belgeli "
+                         "Q-iraksamasini (q_mean 17->37, config.py §11.14) "
+                         "hedefler: aktivasyon dagilimini sabit tutar -> Q "
+                         "sinirli kalir -> uzun egitimde argmax politikasi "
+                         "bozulmaz. Varsayilan KAPALI; acilirsa ESKI "
+                         "checkpoint'ler YUKLENEMEZ, sifirdan egitim gerekir.")
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
@@ -622,7 +631,7 @@ def main():
     agent = build_agent(algo, args.seed, args.device, lr=args.lr,
                         eps_end=args.eps_end, dueling=args.dueling,
                         prioritized=args.prioritized, al_alpha=al_alpha,
-                        munchausen_tau=munchausen_tau)
+                        munchausen_tau=munchausen_tau, layernorm=args.layernorm)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -747,6 +756,8 @@ def main():
     if algo == "vdn" and munchausen_tau > 0.0:
         print(f"Munchausen RL acik: tau={munchausen_tau}, alpha={C.MUNCHAUSEN_ALPHA}, "
               f"clip={C.MUNCHAUSEN_CLIP} (AL'i kapsar + entropi bootstrap)")
+    if algo == "vdn" and args.layernorm:
+        print("LayerNorm acik: Q-agi gizli katmanlari normalize (Q-iraksama karsiti)")
 
     t_start = time.perf_counter()
     best = -1.0   # mission_prob

@@ -187,7 +187,7 @@ class VDNAgent:
                  target_update: int = VDN_TARGET_UPDATE,
                  eps_end: float = EPS_END, dueling: bool = False,
                  prioritized: bool = False, al_alpha: float = 0.0,
-                 munchausen_tau: float = 0.0):
+                 munchausen_tau: float = 0.0, layernorm: bool = False):
         self.device = torch.device(device)
         self.n_actions = n_actions
         torch.manual_seed(seed)
@@ -211,10 +211,11 @@ class VDNAgent:
         # 0.0 = kapali. >0 ise AL'in YERINE gecer (Munchausen zaten AL'i kapsar).
         self.munchausen_tau = float(munchausen_tau)
 
-        self.online = {AGENT_1: build_qnet(n_actions, dueling=dueling).to(self.device),
-                       AGENT_2: build_qnet(n_actions, dueling=dueling).to(self.device)}
-        self.target = {AGENT_1: build_qnet(n_actions, dueling=dueling).to(self.device),
-                       AGENT_2: build_qnet(n_actions, dueling=dueling).to(self.device)}
+        _qkw = dict(dueling=dueling, layernorm=layernorm)
+        self.online = {AGENT_1: build_qnet(n_actions, **_qkw).to(self.device),
+                       AGENT_2: build_qnet(n_actions, **_qkw).to(self.device)}
+        self.target = {AGENT_1: build_qnet(n_actions, **_qkw).to(self.device),
+                       AGENT_2: build_qnet(n_actions, **_qkw).to(self.device)}
         for a in (AGENT_1, AGENT_2):
             self.target[a].load_state_dict(self.online[a].state_dict())
             self.target[a].eval()
