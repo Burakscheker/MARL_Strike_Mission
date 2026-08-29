@@ -254,10 +254,15 @@ tepesi ep15-25 bandi, ~%65-69 team. Iki s0 kosusu (67.5/69 ve 65) tutarli.
 mission_prob checkpoint saklaniyor.
 | seed | tepe eval team% (ep) | 100-harita | not |
 |------|----------------------|------------|-----|
-| 0 | ep15-25 %65-69 | **%69.0** | referans (it2_vdn_epsfast.pt) |
-| 1 | ... | ... | |
-| 2 | ... | ... | |
-| 3 | ... | ... | |
+| 0 | ep15-25 %65-69 | **%69.0** | referans (it2_vdn_epsfast.pt) — SANSLI TOHUM |
+| 1 | ep20 %27.5 (10/20/30: 2.5/27.5/2.5) | — | zayif tohum, ep30'da coktu |
+=> Seed 0 outlier (it1'de de VDN'de en iyi seed 0'di). %69 tek tohuma bagli.
+
+### it2d: seed 0'i zorla — `--eps-start 0.1 --eps-end 0.1` (SABIT eps 0.1, decay yok)
+Hipotez: sabit dusuk-eps buffer'i cesitli tutar -> asiri-temkin geri-besleme
+donusunu kirar -> tepe (ep25) korunur/yukselir (oracle tavani %81.5).
+| ep | team% | not |
+|----|-------|-----|
 
 NOT (altyapi dersi): looping bash script TaskStop'a dayanikli degil (loop
 devam edip yeni kosu baslatiyor). Tek-kosu script + oto-kill kullan.
