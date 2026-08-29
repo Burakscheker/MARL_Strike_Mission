@@ -263,6 +263,21 @@ Hipotez: sabit dusuk-eps buffer'i cesitli tutar -> asiri-temkin geri-besleme
 donusunu kirar -> tepe (ep25) korunur/yukselir (oracle tavani %81.5).
 | ep | team% | not |
 |----|-------|-----|
+| 10 | 50.0  | olu 0.25, VARIS 62.5, adim 3655 |
+| 20 | 47.5  | flat, TIRMANMIYOR. ep25 train MA %68 ama greedy %47.5 (greedy < eps0.1 politika) |
+SONUC: sabit-eps %69'u GECMIYOR (~48 plato). eps ~ayni (0.10 vs 0.095), fark yok.
+=> Epsilon ayari tavani ~%67-69. %75 icin ASIRI-TEMKINI azaltmak lazim (ogrenme/odul).
+
+### it3 — KOD DEGISIKLIGI: R_UNNECESSARY_RISK 20.0 -> 0.0 (config.py:313, geri alinabilir)
+Gerekce: fast-eps'te sorun "gereksiz risk alma" DEGIL, TERSI — asiri temkin
+(olu 0.39/ep, timeout %35, rota meandering, VARIS %80). +20 ek ceza ring
+girisini daha da caydirir -> su anki basarisizlik moduyla TERS. Hafiza notu
+zaten "istenirse kaldirilabilir" diyordu. GATE'lere dokunmaz (KAPI 1/2
+R_TIMEOUT/R_ALL_DEAD ile ilgili).
+Test: it3_vdn_s0_nounnec (VDN s0 --eps-start 0.1 250ep). Beklenti: rota daha
+kisa -> timeout duser -> VARIS %80->%90, team %69->%73-77.
+| ep | team% | not |
+|----|-------|-----|
 
 NOT (altyapi dersi): looping bash script TaskStop'a dayanikli degil (loop
 devam edip yeni kosu baslatiyor). Tek-kosu script + oto-kill kullan.

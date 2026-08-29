@@ -310,7 +310,16 @@ R_RISK_COEF = 65.0
 # buyutulup TRAJEKTORIYI HIC degistirmedigi durumla ayni kaderi paylasabilir.
 # Egitim sonrasi ayni script ile (once/sonra) kacinilabilir-giris orani
 # olculup DOGRULANMALI.
-R_UNNECESSARY_RISK = 20.0
+#
+# 20.0 -> 0.0 (2026-08-29, gece throughput/skor dongusu, it3): fast-eps
+# (--eps-start 0.1) kurulumuyla ajanin sorunu ARTIK "gereksiz risk alma"
+# DEGIL, TERSI — asiri temkin (olu 0.39/ep ama timeout %35, rota meandering,
+# team %69'da takili). Bu ek +20 ceza ring girisini daha da caydiriyor,
+# yani su anki basarisizlik moduyla TERS yonde itiyor. Hafiza notu zaten
+# "net iyilesme SAGLAMADI ... istenirse kaldirilabilir" diyordu. 0.0'a
+# cekildi; it3 testinde peak eval %69'u geciyor mu diye olculecek.
+# GERI ALINABILIR: sadece bu satiri 20.0'a dondur.
+R_UNNECESSARY_RISK = 0.0
 
 # ---------------------------------------------------------------- egitim (ortak)
 SEED = 0
