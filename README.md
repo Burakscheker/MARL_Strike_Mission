@@ -8,52 +8,78 @@ karşılaştırmalı kooperatif multi-agent reinforcement learning deneyi.
 > multi-agent'a çevirmek. Bu proje "iki ajanı koordine etmek için hangi
 > algoritma" sorusunun test tezgâhı. Detay: [Strike_Mission.md §0](Strike_Mission.md)
 
-Durum: 🔬 **VDN olgunlaştı; MAPPO/HAPPO yeni portlandı, kıyas henüz eşit bütçeli değil**
+Durum: 🔬 **VDN olgun — takım başarısı %74.4** (deployment: stall-escape) /
+**%69.2** (saf greedy). QMIX %33; MAPPO/HAPPO eşit bütçeli kıyas henüz yapılmadı.
 
 ---
 
 ## Sonuçlar
 
-### VDN — doğrulanmış en iyi sonuç
+### VDN — en iyi sonuç
 
 100 held-out haritada (25 radar, tohum 9e8+, eğitimle kesişmiyor),
-`--eps-start 0.1` "fast-eps" tarifi:
+`--eps-start 0.1` "fast-eps" tarifi + 5 zar-tohumu ortalaması:
 
-| | değer |
-|---|---:|
-| **`surv_ratio`** (ana metrik) | **0.7635** (medyan 1.0000) |
-| rotası hedefe varıyor | 80% (80/100 harita) |
-| takım başarısı (zar açık) | **69.0%** *(oracle tavanı 81.5%)* |
-| ölü uçak / episode | 0.39 |
-| timeout | 35% |
-| adım | 2632 *(optimal 1998)* |
+| politika | takım başarısı | timeout | ölü/ep | not |
+|---|---:|---:|---:|---|
+| **stall-escape deployment** | **%74.4** *(72–76)* | %9 | 0.63 | `eval/deploy_eval.py` |
+| saf greedy (`argmax Q`) | %69.2 *(68–70)* | %34 | 0.39 | `eval/evaluate.py` (kanonik) |
+| — oracle tavanı | %81.5 | | | Dijkstra referansı |
 
-`surv_ratio` medyanı **1.0000** — yani haritaların yarısından fazlasında ajan
-Dijkstra oracle'ı kadar güvenli bir rota çiziyor. 5 tohumda tekrarlandı,
-ortalama **%69.2**. Checkpoint: `runs/ckpt/it2_vdn_epsfast.pt`
+Ek metrikler (greedy, tek koşu): `surv_ratio` **0.7635** (medyan **1.0000** —
+haritaların yarısından fazlasında ajan Dijkstra oracle'ı kadar güvenli bir rota
+çiziyor), rota hedefe varıyor %80, adım 2632 *(optimal 1998)*.
+Checkpoint: `runs/ckpt/it2_vdn_epsfast.pt`
+
+**stall-escape nedir:** greedy `argmax(Q)` ~25 haritada takılıyor — risk-mesafesi
+azalmayı bırakıyor, ajan timeout yiyor. Sebep: action-gap ~0.03, Q-ağı "ileri git"
+ile "bekle" farkını argmax'ın kararlı seçebileceği kadar büyük kodlayamıyor
+(it8'de ölçüldü). Düzeltme: ajan **150 adımdır ilerlemiyorsa** `argmax` yerine
+`softmax(Q/0.03)` örnekliyor (yalnız o ajan, yalnız stall süresince), ilerleyince
+greedy'ye dönüyor. **Sadece öğrenilen Q** — elle hedef-arama, kural, oracle YOK;
+stall sinyali de ajanın zaten gözlemde gördüğü risk-mesafesi. Eğitim değişmiyor,
+sadece çıkış politikası — gerçek RL sistemlerinde standart bir teknik.
+
+```bash
+python -m eval.deploy_eval --ckpt runs/ckpt/it2_vdn_epsfast.pt
+```
+
+Buraya varmak için mimari tarafında 19 iterasyon denendi (aşağıda "Elenen
+yaklaşımlar"); hiçbiri greedy'yi %69'un üstüne çıkarmadı. Sıçrama deployment
+politikasından geldi.
 
 ### Dört algoritma — ön sonuçlar
 
-⚠️ **Bu tablo eşit bütçeli bir kıyas DEĞİL.** VDN 500 episode + 100 harita ile
-ölçüldü; diğerleri çok daha az eğitim ve 20 harita gördü. Aradaki fark büyük
-ölçüde bunu yansıtıyor, algoritma gücünü değil.
+⚠️ **Bu tablo eşit bütçeli bir kıyas DEĞİL.** Tüm gayret VDN'e gitti (19
+iterasyon, 100 harita, çok sayıda tarif). QMIX bir kez 100 haritada ölçüldü;
+MAPPO/HAPPO küçük bütçe + 20 harita gördü. Aradaki fark büyük ölçüde bunu
+yansıtıyor, algoritma gücünü değil.
 
 | | VDN | QMIX | MAPPO | HAPPO |
 |---|---:|---:|---:|---:|
-| eğitim (episode) | ~500 | 150 | ~50 | ~50 |
-| eval harita | 100 | 20 | 20 | 20 |
-| `surv_ratio` | **0.7635** | 0.1437 | 0.0586 | 0.0543 |
-| rotası hedefe varıyor | **80%** | 50% | 40% | 30% |
-| takım başarısı | **69.0%** | 25.0% | 5.0% | 5.0% |
-| ölü / episode | **0.39** | 1.00 | 1.25 | 1.15 |
+| eğitim (episode) | ~250 | ~150 | ~100–160 | ~50 |
+| eval harita | 100 | 100 | 20 (+40 eğitim-içi) | 20 |
+| `surv_ratio` | **0.7635** | 0.4669 | 0.0586 | 0.0543 |
+| rotası hedefe varıyor | 80% | **94%** | 40% | 30% |
+| **takım başarısı** | **%74.4** / %69.2 greedy | %33.0 | ~%5–10 | ~%5 |
+| ölü / episode | **0.39** | 1.29 | 1.25 | 1.15 |
 
-**Neden eşit değil:** VDN'in `--n-envs 32` ile paralel rollout altyapısı aylar
-önce olgunlaştı. QMIX'in paralel yolu vardı ama CLI'a **hiç bağlanmamıştı**
-(2026-08-28'de bulundu ve düzeltildi); MAPPO/HAPPO ise seri episode topluyordu
-— PPO'nun GAE'si episode sınırlarını net bilmek zorunda olduğu için VDN'in
-auto-reset deseni doğrudan kullanılamıyor. Bunun için ayrı bir "chunk" tabanlı
-paralel toplayıcı yazıldı (`ppo_parallel_rollout`), episode süresi
-**~27 s → ~5.6 s**'ye düştü. Dört algoritmanın eşit bütçeli koşusu sıradaki iş.
+QMIX (`runs/ckpt/it1_qmix.pt`, standart tarif): rotası 100 haritanın 94'ünde
+hedefe **varıyor** — navigasyonu öğrenmiş — ama `surv_ratio` 0.47, yani rota
+oracle'ınkinin yarısı kadar güvenli, episode başına 1.29 ölüm. QMIX'e fast-eps
+tarifi düzgün bütçeyle hiç denenmedi (bir kez `--episodes 120` confound'uyla
+denendi, ep24'te %45 tepe gördü ama o sayı eps-takvimi artefaktı).
+
+MAPPO entropi curriculum (0.03→0.005) ile eğitim-içi takım %5 → %10'a çıktı ama
+orada takıldı; HAPPO ep32'de kesildi. İkisi de on-policy ve `--n-envs 32` chunk
+toplayıcısıyla (`ppo_parallel_rollout`, episode ~27 s → ~5.6 s) hızlandırıldı
+ama eşit bütçeli tam koşu henüz yapılmadı.
+
+**Neden eşit değil:** VDN'in paralel rollout altyapısı aylar önce olgunlaştı.
+QMIX'in paralel yolu vardı ama CLI'a **hiç bağlanmamıştı** (2026-08-28'de bulundu
+ve düzeltildi). MAPPO/HAPPO için ayrı chunk-tabanlı toplayıcı yazılması gerekti
+(PPO'nun GAE'si episode sınırlarını net bilmek zorunda). **Dört algoritmanın
+eşit bütçeli koşusu sıradaki iş.**
 
 ### Neden ham başarı oranı değil `surv_ratio`
 
@@ -144,10 +170,11 @@ python -m pytest tests/ -q
 ```
 
 VDN'in en iyi tarifi (fast-eps) — `--eps-start 0.1` şart, 1.0'dan başlamak
-öğrenmeyi çökertiyor:
+öğrenmeyi çökertiyor. Tepe ep20–25 civarında; sonra "aşırı-temkin drift"
+başlıyor, `mission_prob`-birincil checkpoint seçici erken noktayı yakalıyor:
 
 ```bash
-python train.py --algo vdn --episodes 500 --eval-every 25 --n-envs 32 --device cuda --eps-start 0.1 --tag vdn_r1
+python train.py --algo vdn --episodes 250 --eval-every 15 --eval-episodes 50 --n-envs 32 --device cuda --eps-start 0.1 --tag vdn_r1
 ```
 
 MAPPO / HAPPO (on-policy, paralel toplayıcı ile):
@@ -167,7 +194,7 @@ için `--ckpt` vermeden çalıştır.
 
 **Önemli bayraklar:**
 `--n-envs 32` paralel rollout (dördü de destekliyor; GPU'da şart) ·
-`--eps-start 0.1` VDN/QMIX için kritik ·
+`--eps-start 0.1` VDN için kritik (QMIX'te düzgün bütçeyle denenmedi) ·
 `--n-radar N` curriculum'u kapatıp radar sayısını sabitler ·
 `--hazard per_step` risk modelini ablation olarak değiştirir
 
@@ -212,23 +239,48 @@ için `--ckpt` vermeden çalıştır.
 
 ### Elenen yaklaşımlar
 
-Çalışmayan şeyi belgelemek de sonuçtur:
+Çalışmayan şeyi belgelemek de sonuçtur. `--eps-start 0.1` atılımından (%33 → %69)
+sonra greedy tavanı %75'e taşımak için 19 mimari/eğitim iterasyonu denendi —
+**hiçbiri greedy'yi %69'un üstüne çıkarmadı** (asıl sıçrama sonradan deployment
+tarafından, stall-escape ile geldi):
 
 | yaklaşım | sonuç |
 |---|---|
 | BC ön-eğitim → RL fine-tune (3 varyant) | ❌ BC'nin sınırsız Q-ölçeği TD ile yeniden kalibre olunca sıralama siliniyor |
-| Dueling + Prioritized Replay | ❌ öğreniyor (0→0.23) ama geç bozuluyor, eşiği geçmiyor |
-| QR-DQN (distributional) | ❌ elendi |
-| Munchausen RL / Advantage Learning | ❌ elendi |
-| LayerNorm Q-ağı (BroNet/CrossQ) | ❌ elendi |
+| Dueling (± Prioritized Replay) | ❌ rastgele init edilen A-head 250 episode'da yakınsamıyor, pervasız |
+| Advantage Learning (Bellemare 2016) | ❌ action-gap'i 15× açtı (0.03→0.36) ama greedy "aşırı temkinli"ye kaydı, %45 |
+| Munchausen RL (Vieillard 2020) | ❌ entropi Q-manzarasını düzleştirdi, argmax bozuldu, %40 |
+| QR-DQN distributional (16 kuantil ± iyimserlik) | ❌ 80-çıkışlı başlık fast-eps bütçesinde güvenli rota öğrenemedi, pervasız |
+| LayerNorm Q-ağı (BroNet/CrossQ) | ❌ hedef-yön magnitude sinyalini normalize edip sildi, VARIS %2.5 |
 | ham Manhattan shaping | ❌ regresyon (%69 → %20), geri alındı |
-| batch 64 / 256 override | ❌ ters etki |
-| checkpoint ensemble | ❌ etkisiz |
+| batch 64 / 256 override | ❌ iki yönde de ters (128 sweet spot); büyük batch → karamsar sabit-noktaya daha hızlı yakınsıyor |
+| hızlı curriculum (25 radara ep25'te) | ❌ hard-maps-erken = pozitif örnek yok = "hiç hareket etme" |
+| checkpoint ensemble | ❌ snapshot'lar korele, zayıf olanlar Q-ortalamayı çekiyor |
+| deployment uniform-eps / düz Boltzmann | ❌ timeout'u ölüme takas ediyor, net negatif |
+| çoklu net-tohum taraması | ❌ yüksek varyans; seed 0 = %70, seed 1 = %27, seed 2 = %48 (şanslı outlier) |
 
-Asıl atılım mimariden değil **keşif takviminden** geldi: `--eps-start 0.1`
-(epsilon'u 1.0 yerine 0.1'den başlatmak) takım başarısını %33'ten %69'a
-çıkardı. Eğitilmiş bir başlangıç noktası varken yüksek epsilon, öğrenilmiş
-politikayı yüzlerce episode boyunca rastgele aksiyonlarla bozuyor.
+**Kök neden:** `it2_vdn_epsfast.pt` %69 = kırılgan dengeli bir yerel optimum.
+Değer fonksiyonu radar ölüm cezasını aşırı ağırlıklandırıp karamsar/aşırı-temkinli
+bir sabit-noktaya oturuyor; fast-eps + erken checkpoint bunu *oturmadan önce*
+yakalıyor. Dengenin herhangi bir bileşeni (batch, mimari, curriculum, target,
+seed) değişince çöküyor. Temiz/hızlı/keskin öğrenme oraya *daha hızlı* götürüyor
+— gürültü (eps, orta batch) oturmayı geciktiriyor. **Tek işe yarayan ek:**
+deployment'ta stall-tetikli Boltzmann (yukarıda, %74.4) — ama o da öğrenmeyi
+değil çıkış politikasını değiştiriyor.
+
+Bu 19 iterasyonun kodu (AL/Munchausen/QR-DQN/LayerNorm/batch-override/…) tam
+teşhisiyle `NOTES.md`'de; repodan `82e7f76`'da çıkarıldı (−392 satır),
+`it2_vdn_epsfast` tarifi birebir korundu. Tek kalan ek: `eval/deploy_eval.py`
+(yukarıdaki stuck-escape ölçümü).
+
+İki atılım da mimariden değil **politikadan** geldi:
+1. **Keşif takvimi** — `--eps-start 0.1` (epsilon'u 1.0 yerine 0.1'den
+   başlatmak) takım başarısını %33 → %69'a çıkardı. Eğitilmiş bir başlangıç
+   noktası varken yüksek epsilon, öğrenilmiş politikayı yüzlerce episode
+   boyunca rastgele aksiyonlarla bozuyor.
+2. **Çıkış politikası** — stall-tetikli Boltzmann greedy tavanını (%69)
+   deployment'ta %74.4'e taşıdı. Q-ağı zaten doğru sıralamayı biliyor, argmax
+   sadece action-gap çok küçük olduğu için kararlı seçemiyor.
 
 `train_bc.py` (oracle davranış klonlama) bir **teşhis aracı** olarak yazıldı ve
 %99.3 uzman eşleşmesiyle şunu kanıtladı: doğru cevap gözlemin içinde, yani
