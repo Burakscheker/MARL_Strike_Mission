@@ -355,6 +355,22 @@ skalari #11 degismedi. test_env GECTI. Kritik test: VDN fast-eps (%69 recipe)
 %69 -> ?
 | ep | eval team% | not |
 |----|-----------|-----|
+| 15 | 20.0 | olu 1.30 (risk-farkinda: %65, olu 0.35) |
+| 30 | 20.0 | mp 0.333 |
+| 45 | 7.5  | COKUS (VARIS %10, adim 3682) |
+SONUC: **ham-Manhattan shaping REGRESYON** (%69 -> ~%20). Ajan hedefe dogru
+riske BAKMADAN kosuyor (olu 1.3 vs 0.35). Burak'in risk-farkinda shaping'i
+MEGER ISE YARIYORDU: bir radari dolasmak risk-mesafeyi DUSURUYOR ("ilerleme"
+gibi hissettiriyor) -> guvenli rota tesvik ediliyor. Ham Manhattan bunu
+kaldiriyor -> pervasizlik. §11.12'nin "takilma"si gercek bir optimizasyon
+sorunu, shaping artefakti DEGIL. GERI ALINDI (git revert 4a83e72).
+
+### it5-it6 NIHAI: euzxx fikirleri (opt 1 + opt 3) %69'u GECMEDI
+- opt 1 (entropy curr): MAPPO ~2x'e cikti (mp 0.135) ama ~%10; KALDI (zararsiz).
+- opt 3 (ham-Manhattan shaping): REGRESYON %69->%20; GERI ALINDI.
+- EN IYI hala `it2_vdn_epsfast.pt` %69 (`--eps-start 0.1`, kod degisikligi YOK).
+- %75 icin geriye: "deeper RL" (greedy politika kirilganligi / kredi atama) —
+  daha buyuk arastirma isi, hizli bir bayrakla degil.
 
 
 
