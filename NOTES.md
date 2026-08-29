@@ -247,14 +247,20 @@ gercek tepeyi yakala — ep25 ille de tepe degil), (c) drift'i yavaslatmak
 eps ep24'te tabanda. sw s0 (48ep) ep16 %10 sonra coktu — %69'u URETMEDI.
 DERS: %69 recipe'i TAM tut: `--episodes 250 --eps-start 0.1`, ep~25 checkpoint.
 
-### it2b: sweep3 — DOGRU recipe (--episodes 250 --eps-start 0.1, eval-every 15), s0-s3
-| seed | en iyi eval team% (ep) | 100-harita | not |
-|------|------------------------|------------|-----|
-| 0 (it2 orijinal) | ep25 %67.5 | **%69.0** | referans; sweep3'te ince grid ile tekrar |
-| 0 (it2b) | ... | ... | |
+### it2b/it2c: coklu tohum, DOGRU recipe (--episodes 250 --eps-start 0.1)
+it2b s0 ince grid: **tepe ep15 %65** (ep30 %45 -> drift). Yani VDN fast-eps
+tepesi ep15-25 bandi, ~%65-69 team. Iki s0 kosusu (67.5/69 ve 65) tutarli.
+=> it2c: her tohum icin --episodes 250, ep40'ta oto-kill (tepe gecti), en iyi
+mission_prob checkpoint saklaniyor.
+| seed | tepe eval team% (ep) | 100-harita | not |
+|------|----------------------|------------|-----|
+| 0 | ep15-25 %65-69 | **%69.0** | referans (it2_vdn_epsfast.pt) |
 | 1 | ... | ... | |
 | 2 | ... | ... | |
 | 3 | ... | ... | |
+
+NOT (altyapi dersi): looping bash script TaskStop'a dayanikli degil (loop
+devam edip yeni kosu baslatiyor). Tek-kosu script + oto-kill kullan.
 
 
 
