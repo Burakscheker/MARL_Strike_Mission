@@ -23,13 +23,15 @@ import numpy as np
 
 from baselines.risk_oracle import build_risk_distance_map, build_zone_map
 from config import (AGENT_1, AGENT_2, ALERT_DECAY, ALERT_ENABLED, ALERT_MULT,
-                    DIRS, GAMMA, GOAL, GRID_N, HAZARD_MODE, INNER_HALF,
-                    MAP_MAX_ITER, MAX_STEPS, NOOP, N_ACTIONS, N_RADAR,
+                    DIRS, GAMMA, GLOBAL_PATCH_STRIDE, GOAL, GRID_N, HAZARD_MODE,
+                    INNER_HALF, MAP_MAX_ITER, MAX_STEPS, NOOP, N_ACTIONS, N_RADAR,
                     OUTER_HALF, P_DEATH, PATCH_RADIUS, PATCH_SIZE,
                     PATCH_STRIDE, P_INNER_TOTAL, P_OUTER_TOTAL, RADARS,
                     RADAR_RANDOM, REWARD_SCALE, R_ALL_DEAD, R_DEATH,
                     R_FIRST_GOAL, R_RISK_COEF, R_SECOND_GOAL, R_STEP,
-                    R_TIMEOUT, SHAPING_COEF, START, STATE_DIM)
+                    R_STUCK, R_TIMEOUT, R_UNNECESSARY_RISK, SHAPING_COEF,
+                    START, STATE_DIM, STUCK_BOX, STUCK_GRACE_STEPS,
+                    STUCK_WINDOW)
 from env.sampler import sample_radars
 
 Cell = tuple[int, int]
@@ -81,6 +83,9 @@ class StrikeMissionEnv:
         # yerel pencerenin ornekleme ofsetleri (stride'li — bkz. config.py)
         self._off = PATCH_STRIDE * np.arange(-PATCH_RADIUS, PATCH_RADIUS + 1)
         self._coarse_n = (n + PATCH_STRIDE - 1) // PATCH_STRIDE
+        # kuresel (coklu-olcek) kanal icin COK DAHA GENIS araliklarla ornekleme
+        # ofseti — bkz. config.py GLOBAL_PATCH_STRIDE notu.
+        self._off_global = GLOBAL_PATCH_STRIDE * np.arange(-PATCH_RADIUS, PATCH_RADIUS + 1)
 
         self.reset()
 
@@ -182,6 +187,10 @@ class StrikeMissionEnv:
         # optimal YOL degismez ve surv_ratio'da (ajan/oracle) tamamen
         # sadelesir. Sadece mutlak hayatta kalma sayilari o carpani icerir.
         self._prev_zone = {AGENT_1: 0, AGENT_2: 0}
+        # SALINIM ONLEME (bkz. config.py N_SCALARS notu): bu adimda GERCEKTEN
+        # uygulanan hareket (dr, dc) — NOOP/engellenen hareket/episode basi
+        # icin (0, 0).
+        self.last_move = {AGENT_1: (0, 0), AGENT_2: (0, 0)}
 
         self.t = 0
         self.done = False
@@ -244,11 +253,18 @@ class StrikeMissionEnv:
 
     # ------------------------------------------------------------ gozlem
 
-    def _patch(self, grid: np.ndarray, center: Cell, oob: float) -> np.ndarray:
-        """center etrafinda PATCH_SIZE x PATCH_SIZE, PATCH_STRIDE araliklarla
-        SEYREK orneklenmis pencere. Sinir disi noktalar oob degerini alir."""
-        rows = center[0] + self._off
-        cols = center[1] + self._off
+    def _patch(self, grid: np.ndarray, center: Cell, oob: float,
+              off: np.ndarray | None = None) -> np.ndarray:
+        """center etrafinda PATCH_SIZE x PATCH_SIZE, off araliklarla SEYREK
+        orneklenmis pencere. Sinir disi noktalar oob degerini alir.
+
+        off verilmezse yerel (self._off, PATCH_STRIDE) kullanilir; kuresel
+        (coklu-olcek) kanal icin self._off_global gecilir — bkz. config.py
+        GLOBAL_PATCH_STRIDE notu."""
+        if off is None:
+            off = self._off
+        rows = center[0] + off
+        cols = center[1] + off
         rv = (rows >= 0) & (rows < grid.shape[0])
         cv = (cols >= 0) & (cols < grid.shape[1])
         patch = np.full((PATCH_SIZE, PATCH_SIZE), oob, dtype=np.float32)
@@ -269,15 +285,47 @@ class StrikeMissionEnv:
             patch[np.ix_(rv, cv)] = grid[np.ix_(rows[rv], cols[cv])]
         return patch
 
+    def _action_risk4(self, agent: int) -> list[float]:
+        """4 yon (yukari/sag/asagi/sol) icin "o yone girersem BU ADIMDA ne
+        kadar olum riski aliyorum" — hem observe() (aktor) hem state()
+        (merkezi kritik, 2026-08-28 dis inceleme: kritik bu bilgiyi hic
+        gormuyordu) tarafindan paylasilir.
+
+        prev_z=self._prev_zone[agent] KULLANILIR, self.zone[own] DEGIL:
+        gercek step()'in hazard() cagrisi (prev_z=None -> bu AYNI deger)
+        ILK ADIMDA HER ZAMAN 0'dan baslar — "kalkis istisnasi yok" (Burak,
+        2026-08-06): B bir halkada baslasa BILE (haritalarin ~%40'i) ilk
+        adimda zar atilir. self.zone[own] kullanmak, B bir halkada
+        basladiginda gozlemin "guvenli" demesine ragmen GERCEKTE zar
+        atilmasina yol aciyordu — gozlem ile gercek DAVRANIS celisiyordu.
+        self._prev_zone[agent] HER ZAMAN _hazard()'in GERCEKTE kullanacagi
+        AYNI referans (t=0'da 0, sonraki adimlarda zaten self.zone[own]'a esit).
+        """
+        own = self.pos[agent]
+        risk4 = []
+        for dr, dc in DIRS:
+            rr, cc = own[0] + dr, own[1] + dc
+            if self._in_bounds((rr, cc)):
+                ridx_n, z_n = self._radar_at((rr, cc))
+                risk4.append(self._hazard(agent, ridx_n, z_n,
+                                          prev_z=self._prev_zone[agent]))
+            else:
+                risk4.append(1.0)      # grid disi: mumkun en kotu (nb ile ayni felsefe)
+        return risk4
+
     def observe(self, agent: int) -> np.ndarray:
         n = self.n
         own, other = self.pos[agent], self.pos[1 - agent]
 
-        # kanal 0: tehlike (sinir disi = 0.0 -> grid disi "guvenli ama gidilemez";
-        #          maske zaten oraya gitmeyi engelliyor, sahte tehlike uretme)
+        # kanal 0: YEREL tehlike (sinir disi = 0.0 -> grid disi "guvenli ama
+        #          gidilemez"; maske zaten oraya gitmeyi engelliyor, sahte
+        #          tehlike uretme)
         # kanal 1: kendi izi (kaba izgara)
+        # kanal 2: KURESEL tehlike (ayni harita, cok daha genis ornekleme —
+        #          bkz. config.py GLOBAL_PATCH_STRIDE notu)
         ch = np.stack([self._patch(self.danger, own, 0.0),
-                       self._coarse_patch(self._vis[agent], own, 0.0)])
+                       self._coarse_patch(self._vis[agent], own, 0.0),
+                       self._patch(self.danger, own, 0.0, off=self._off_global)])
 
         d_own = float(self.dist[own])
         nb = []
@@ -288,6 +336,7 @@ class StrikeMissionEnv:
                                         -NEIGHBOR_CLIP, NEIGHBOR_CLIP)))
             else:
                 nb.append(-NEIGHBOR_CLIP)      # grid disi: mumkun en kotu
+        risk4 = self._action_risk4(agent)
 
         man_goal = abs(own[0] - self.goal[0]) + abs(own[1] - self.goal[1])
         man_other = abs(own[0] - other[0]) + abs(own[1] - other[1])
@@ -309,6 +358,8 @@ class StrikeMissionEnv:
             # 1.0'a satüre oluyordu, yani bilgisiz bir sabit girdiye donuyordu.
             min(1.0, d_own / self.dist_scale),
             *nb,
+            *self.last_move[agent],
+            *risk4,
         ], dtype=np.float32)
         return np.concatenate([ch.ravel(), scalars])
 
@@ -316,7 +367,13 @@ class StrikeMissionEnv:
         return {AGENT_1: self.observe(AGENT_1), AGENT_2: self.observe(AGENT_2)}
 
     def state(self) -> np.ndarray:
-        """QMIX mixer icin global state."""
+        """QMIX mixer + MAPPO/HAPPO merkezi kritigi icin GLOBAL state.
+
+        EKLENTI (2026-08-28, dis inceleme): iki ajanin eylem-ozgu risk
+        skalarlari (bkz. _action_risk4) eklendi — ONCEDEN kritik bu bilgiyi
+        HIC gormuyordu (sadece 2 tehlike-yaması + 8 skalar), aktorler
+        observe() ile goruyordu ama kritik gormuyordu, bu da MAPPO/HAPPO'nun
+        merkezi-kritik avantajini kismen etkisizlestiriyordu."""
         n = self.n
         ch = np.stack([self._patch(self.danger, self.pos[AGENT_1], 0.0),
                        self._patch(self.danger, self.pos[AGENT_2], 0.0)])
@@ -327,6 +384,8 @@ class StrikeMissionEnv:
             self.goal[0] / n, self.goal[1] / n,
             n_term / 2.0,
             self.t / self.max_steps,
+            *self._action_risk4(AGENT_1),
+            *self._action_risk4(AGENT_2),
         ], dtype=np.float32)
         out = np.concatenate([ch.ravel(), scalars])
         assert out.size == STATE_DIM, (out.size, STATE_DIM)
@@ -358,11 +417,13 @@ class StrikeMissionEnv:
                 r_ind[a] += R_STEP
 
         # --- 1) es zamanli hareket
+        pos_before = dict(self.pos)            # gereksiz-risk kontrolu icin (asagida)
         for agent in (AGENT_1, AGENT_2):
             if self.terminal(agent):
                 continue
             act = int(actions[agent])
             if act == NOOP:
+                self.last_move[agent] = (0, 0)
                 continue                       # maskeli; gelirse yerinde kal
             dr, dc = DIRS[act]
             nxt = (self.pos[agent][0] + dr, self.pos[agent][1] + dc)
@@ -370,9 +431,26 @@ class StrikeMissionEnv:
                 self.pos[agent] = nxt
                 self.path[agent].append(nxt)
                 self._vis[agent][nxt[0] // PATCH_STRIDE, nxt[1] // PATCH_STRIDE] = 1.0
+                self.last_move[agent] = (dr, dc)
+            else:
+                self.last_move[agent] = (0, 0)
 
         self.t += 1
         info: dict = {}
+
+        # --- 1b) sikisma cezasi: START'in STUCK_BOX x STUCK_BOX kutusunda
+        #     STUCK_GRACE_STEPS'ten fazla kalindiysa, en fazla STUCK_WINDOW
+        #     adim boyunca HER ADIM ek ceza (bkz. config.py R_STUCK notu).
+        #     Kacinmayi degil, oyalanmayi cezalandirir; SINIRLI (penceresi var).
+        if STUCK_GRACE_STEPS < self.t <= STUCK_GRACE_STEPS + STUCK_WINDOW:
+            for agent in (AGENT_1, AGENT_2):
+                if self.terminal(agent):
+                    continue
+                pr, pc = self.pos[agent]
+                if (abs(pr - START[0]) < STUCK_BOX
+                        and abs(pc - START[1]) < STUCK_BOX):
+                    r_team += R_STUCK
+                    r_ind[agent] += R_STUCK
 
         # --- 2) olum zari (alarm carpani BU adimdan ONCEKI durumu kullanir:
         #        radarin "uyanmasi" bir tik surer — ayni adimda giren ucagin
@@ -388,6 +466,9 @@ class StrikeMissionEnv:
                     cost = R_RISK_COEF * p       # beklenen olum maliyetini pesin ode
                     r_team -= cost
                     r_ind[agent] -= cost
+                    if self._unnecessary_entry(agent, pos_before[agent]):
+                        r_team -= R_UNNECESSARY_RISK
+                        r_ind[agent] -= R_UNNECESSARY_RISK
                 if self.death_enabled and self.rng.random() < p:
                     self.alive[agent] = False
                     self.death_step[agent] = self.t
@@ -481,13 +562,21 @@ class StrikeMissionEnv:
         info["t"] = self.t
         return self.observations(), float(r_team), self.done, info
 
-    def _hazard(self, agent: int, ridx: int, z: int) -> float:
-        """Bu adimda bu ucagin olum olasiligi."""
+    def _hazard(self, agent: int, ridx: int, z: int, prev_z: int | None = None) -> float:
+        """Bu adimda bu ucagin olum olasiligi.
+
+        prev_z: karsilastirilacak ONCEKI bolge (varsayilan: self._prev_zone[agent],
+        gercek adim icin). observe()'un eylem-ozgu risk skalarlari (2026-08-27)
+        AYNI fonksiyonu, ajanin SU ANKI bolgesini prev_z olarak vererek "bu
+        yone gitseydim ne olurdu" sorusunu mantigi tekrarlamadan sorar — alert
+        carpani dahil TAM AYNI model kullanilir, iki yerde ayri ayri bakim
+        gerektirmez."""
         if z == 0:
             return 0.0
+        pz = self._prev_zone[agent] if prev_z is None else prev_z
         if self.hazard_mode == "per_entry":
             # SADECE bolgeye GIRIS adiminda zar (ablation modu)
-            if z <= self._prev_zone[agent]:
+            if z <= pz:
                 return 0.0
             p = P_INNER_TOTAL if z == 2 else P_OUTER_TOTAL
         else:
@@ -495,6 +584,32 @@ class StrikeMissionEnv:
         if self.alert_enabled and ridx >= 0 and self.alert[ridx] > 0:
             p = min(1.0, p * ALERT_MULT)
         return p
+
+    def _unnecessary_entry(self, agent: int, prev_pos: "Cell") -> bool:
+        """GIRIS aninda GERCEKTEN baska secenek var miydi?
+
+        Burak'in gozlemi (2026-08-21): basarisiz haritalarin onemli bir
+        kisminda ucak bos/guvenli bir alanda "durup dururken" bir halkaya
+        giriyordu. viz/analyze_unforced_deaths.py ile olculdu: %40
+        checkpoint'te (ms3ks1_vdn8k_r25) 100 haritada 88 olumun 71'inde
+        (%81) GIRIS anindaki eski pozisyondan zonu ARTIRMAYAN baska bir
+        yon (donup durmak degil, GERCEKTEN farkli bir komsu) mumkundu.
+        Bu, genel R_RISK_COEF'i buyutmekten (denendi, R_RISK_COEF=120
+        catastrofik basarisiz oldu — bkz. yukarida) FARKLI bir mudahale:
+        sadece bu ozel "kacinilabilir giris" anini hedefler, haritanin
+        geometrisi geregi zorunlu geciscleri etkilemez.
+        """
+        if self.hazard_mode != "per_entry":
+            return False                       # sadece per_entry icin tanimli
+        prev_zone = int(self.zone[prev_pos])
+        cur_pos = self.pos[agent]
+        for dr, dc in DIRS:
+            cand = (prev_pos[0] + dr, prev_pos[1] + dc)
+            if cand == cur_pos or not self._in_bounds(cand):
+                continue
+            if int(self.zone[cand]) <= prev_zone:
+                return True                     # ayni/daha dusuk zonda alternatif vardi
+        return False
 
     # ----------------------------------------------------------- terminal
 

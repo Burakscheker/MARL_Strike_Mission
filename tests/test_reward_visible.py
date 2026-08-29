@@ -48,7 +48,17 @@ def run(all_dead: float, reward_scale: float, huber_beta: float,
     torch.manual_seed(0)
     np.random.seed(0)
     agent = build_agent("vdn", 0, "cpu")
-    agent.load(CKPT)
+    # N_SCALARS 16->18 (son-hareket ozelligi) sabit CKPT'yi ESKI sekle
+    # kilitledi — KATI agent.load() artik SEKIL UYUSMAZLIGI ile patlar.
+    # load_matching() UYANLARI yukler, uymayan 2 katmani (scalar_enc,
+    # head ilk katmanlari) rasgele baslatilmis birakir — bu testin amaci
+    # icin (trajektori DEGISIYOR mu, mutlak performans degil) yeterli.
+    import agents.transfer as transfer
+    ckpt = torch.load(CKPT, map_location="cpu")
+    transfer.load_matching(agent.online[C.AGENT_1], ckpt["online1"], "A1")
+    transfer.load_matching(agent.online[C.AGENT_2], ckpt["online2"], "A2")
+    for a in (C.AGENT_1, C.AGENT_2):
+        agent.target[a].load_state_dict(agent.online[a].state_dict())
     env = SE.StrikeMissionEnv(seed=0, radar_random=True)
     sig = []
     for ep in range(1, episodes + 1):
@@ -71,7 +81,8 @@ def matrix():
     print(f"{EPISODES} episode, ayni tohum. 'GORUNUR' = R_ALL_DEAD -25 -> -100 "
           f"trajektoriyi degistiriyor.\n")
     print(f"{'REWARD_SCALE':>14}{'HUBER_BETA':>12}{'odul gorunur mu':>18}")
-    for scale, beta in ((1.0, 1.0), (1.0, 50.0), (0.05, 1.0), (0.05, 50.0)):
+    for scale, beta in ((1.0, 1.0), (1.0, 50.0), (0.05, 1.0), (0.05, 50.0),
+                       (1.0, 2.0), (1.0, 5.0), (1.0, 10.0), (1.0, 25.0)):
         v = visible(scale, beta)
         print(f"{scale:>14}{beta:>12}{('EVET' if v else 'hayir'):>18}")
     print("\nSecim bu tabloya gore yapilir; config.REWARD_SCALE / HUBER_BETA.")

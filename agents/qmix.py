@@ -25,7 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from agents.networks import build_qnet, masked_q
+from agents.networks import DeterministicAdaptiveAvgPool2d, build_qnet, masked_q
 from config import (HUBER_BETA, AGENT_1, AGENT_2, CNN_CHANNELS, EPS_END, EPS_START,
                     GAMMA, GRAD_CLIP, LEARN_EVERY, N_ACTIONS, OBS_DIM,
                     PATCH_SIZE, QMIX_BATCH, QMIX_BUFFER, QMIX_EPS_DECAY_STEPS,
@@ -120,7 +120,13 @@ class QMixer(nn.Module):
                       nn.ReLU()]
             in_c = out_c
         self.state_conv = nn.Sequential(*layers)
-        self.state_pool = nn.AdaptiveAvgPool2d(pool_size)
+        # DETERMINIZM (2026-08-28, dis inceleme — CNNQNet'teki AYNI fix
+        # burada UNUTULMUS): nn.AdaptiveAvgPool2d'nin CUDA backward'i
+        # deterministik degil (bkz. agents/networks.py DeterministicAdaptiveAvgPool2d
+        # docstring'i — bu ayni fix, ikinci bir yerde tekrarlanmasin diye
+        # ORAYA tasinabilirdi ama mixer'in kendi kucuk govdesi CNNQNet'i
+        # KULLANMIYOR, o yuzden ayni sinif burada da import edilip kullanildi).
+        self.state_pool = DeterministicAdaptiveAvgPool2d(pool_size)
         state_embed_dim = in_c * pool_size * pool_size + state_scalars
 
         self.hyper_w1 = nn.Linear(state_embed_dim, n_agents * embed_dim)
@@ -210,13 +216,35 @@ class QMixAgent:
         legal = np.flatnonzero(mask)
         if len(legal) == 0:
             raise RuntimeError("gecerli aksiyon yok — ortam maskesi hatali")
-        if self.rng.random() < eps:
+        if eps > 0.0 and self.rng.random() < eps:
             return int(self.rng.choice(legal))
         with torch.no_grad():
             o = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
             m = torch.as_tensor(mask, dtype=torch.float32, device=self.device).unsqueeze(0)
             q = masked_q(self.online[agent_id](o), m)
             return int(q.argmax(dim=1).item())
+
+    def act_batch(self, agent_id: int, obs: np.ndarray, mask: np.ndarray,
+                 eps: float | None = None) -> np.ndarray:
+        """act()'in VEKTORIZE hali — bkz. agents/vdn.py'deki ayni metod,
+        BIREBIR ayni mantik (mixer bu adimda kullanilmiyor, o sadece
+        learn()'de devreye girer)."""
+        eps = self.eps if eps is None else eps
+        with torch.no_grad():
+            o = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+            m = torch.as_tensor(mask, dtype=torch.float32, device=self.device)
+            q = masked_q(self.online[agent_id](o), m)
+            greedy = q.argmax(dim=1).cpu().numpy()
+        if eps <= 0.0:
+            return greedy
+        explore = self.rng.random(obs.shape[0]) < eps
+        if explore.any():
+            acts = greedy.copy()
+            for i in np.flatnonzero(explore):
+                legal = np.flatnonzero(mask[i])
+                acts[i] = self.rng.choice(legal)
+            return acts
+        return greedy
 
     def q_value(self, agent_id: int, obs: np.ndarray, action: int) -> float:
         """PLAN §Asama 5 saglik kontrolu — QMIX'te de aynen gecerli."""

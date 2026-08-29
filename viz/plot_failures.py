@@ -27,9 +27,10 @@ import config as C
 from baselines.risk_oracle import direction_costs, greedy_path, survival_prob
 from env.sampler import eval_map_seeds
 from env.strike_env import StrikeMissionEnv
-from env.two_agent import play_episode, play_episode_qmix, play_episode_vdn
+from env.two_agent import play_episode_ppo, play_episode_qmix, play_episode_vdn
 
-RUNNER = {"iql": play_episode, "vdn": play_episode_vdn, "qmix": play_episode_qmix}
+RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
+         "vdn": play_episode_vdn, "qmix": play_episode_qmix}
 BG = "#0d1117"
 plt.style.use("dark_background")
 
@@ -38,9 +39,11 @@ def man(a, b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
-def collect(agent, algo, n_scan, max_steps):
-    env = StrikeMissionEnv(seed=12345, radar_random=True, n_radar=C.N_RADAR,
-                           max_steps=max_steps, death_enabled=False)
+def collect(agent, algo, n_scan, max_steps, dice_on=False, seed=12345):
+    env = StrikeMissionEnv(seed=seed, radar_random=True, n_radar=C.N_RADAR,
+                           max_steps=max_steps, death_enabled=dice_on)
+    if dice_on:
+        env.rng = np.random.default_rng(seed)
     runner = RUNNER[algo]
     out = []
     for ms in eval_map_seeds(n_scan):
@@ -52,6 +55,8 @@ def collect(agent, algo, n_scan, max_steps):
         out.append({
             "seed": ms, "zone": z, "oracle": orc,
             "p1": list(env.path[C.AGENT_1]), "p2": list(env.path[C.AGENT_2]),
+            "dead1": bool(dice_on and not env.alive[C.AGENT_1]),
+            "dead2": bool(dice_on and not env.alive[C.AGENT_2]),
             "reached": bool(info["reached1"] or info["reached2"]),
             "steps": int(info["steps"]),
             "orc_s": survival_prob(orc, z, C.HAZARD_MODE),
@@ -62,7 +67,7 @@ def collect(agent, algo, n_scan, max_steps):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--algo", default="vdn", choices=("iql", "vdn", "qmix"))
+    ap.add_argument("--algo", default="vdn", choices=("mappo", "happo", "vdn", "qmix"))
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--scan", type=int, default=20, help="taranacak harita")
     ap.add_argument("--panels", type=int, default=6)
@@ -70,19 +75,20 @@ def main():
                     help="fail = varamayanlar; risky = VARAN ama rotasi "
                          "oracle'a gore en tehlikeli olanlar")
     ap.add_argument("--max-steps", type=int, default=C.MAX_STEPS)
+    ap.add_argument("--dice-on", action="store_true",
+                    help="zar ACIK kosuluyor (gercek olum riski); "
+                         "varsayilan zar KAPALI (rotanin kendisini teshis eder)")
+    ap.add_argument("--seed", type=int, default=12345,
+                    help="zar-acik modda hangi zar dizisi (tekrarlanabilirlik)")
     ap.add_argument("--out", default="runs/fig_failures.png")
     args = ap.parse_args()
 
     from train import build_agent
     agent = build_agent(args.algo, 0, "cpu")
-    if args.algo == "iql":
-        stem = args.ckpt.replace("_agent1.pt", "").replace(".pt", "")
-        agent[C.AGENT_1].load(f"{stem}_agent1.pt")
-        agent[C.AGENT_2].load(f"{stem}_agent2.pt")
-    else:
-        agent.load(args.ckpt)
+    agent.load(args.ckpt)
 
-    data = collect(agent, args.algo, args.scan, args.max_steps)
+    data = collect(agent, args.algo, args.scan, args.max_steps,
+                   dice_on=args.dice_on, seed=args.seed)
     if args.mode == "fail":
         bad = [d for d in data if not d["reached"]][:args.panels]
     else:
@@ -106,14 +112,19 @@ def main():
         oy, ox = zip(*e["oracle"])
         ax.plot(ox, oy, color="#8b949e", lw=1.5, ls="--", label="oracle")
         notes = []
-        for pk, c, lb in (("p1", "#3ddc97", "ucak 1"), ("p2", "#58a6ff", "ucak 2")):
+        for pk, dk, c, lb in (("p1", "dead1", "#3ddc97", "ucak 1"),
+                              ("p2", "dead2", "#58a6ff", "ucak 2")):
             if not e[pk]:
                 continue
             py, px = zip(*e[pk])
             ax.plot(px, py, color=c, lw=1.7, label=lb)
             end = e[pk][-1]
-            ax.plot(end[1], end[0], "x", color=c, ms=11, mew=2.5)
-            notes.append(f"{lb}: kalan {man(end, C.GOAL)}")
+            died = e.get(dk, False)
+            marker = "X" if died else "x"
+            ax.plot(end[1], end[0], marker, color=c, ms=13 if died else 11,
+                    mew=2.5, mec="#ff7b72" if died else c)
+            tag = " OLDU" if died else ""
+            notes.append(f"{lb}{tag}: kalan {man(end, C.GOAL)}")
         ax.plot(0, 0, "o", color="#58a6ff", ms=8)
         ax.plot(C.GOAL[1], C.GOAL[0], "*", color="#ff7b72", ms=15)
         capped = e["steps"] >= args.max_steps
@@ -129,9 +140,11 @@ def main():
 
     np.atleast_1d(axes).ravel()[0].legend(fontsize=7, framealpha=0.25,
                                           loc="lower left")
+    zar_txt = "zar ACIK (gercek olum riski)" if args.dice_on else "zar KAPALI (ucak olmuyor)"
+    x_txt = "buyuk X (kirmizi kenarli) = OLDU   " if args.dice_on else ""
     fig.suptitle(
-        f"NEDEN VARAMADILAR — {args.algo.upper()}, zar KAPALI (ucak olmuyor)\n"
-        f"X = rotanin bittigi yer   koyu sari: dis halka   koyu kirmizi: ic halka",
+        f"NEDEN VARAMADILAR — {args.algo.upper()}, {zar_txt}\n"
+        f"{x_txt}kucuk x = rotanin bittigi yer   koyu sari: dis halka   koyu kirmizi: ic halka",
         fontsize=12, y=1.0)
     fig.tight_layout()
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

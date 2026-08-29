@@ -28,9 +28,12 @@ import os
 
 import numpy as np
 
-from config import (GOAL, GRID_N, HAZARD_MODE, INNER_HALF, OUTER_HALF,
+from config import (DIRS, GOAL, GRID_N, HAZARD_MODE, INNER_HALF, OUTER_HALF,
                     P_DEATH, P_INNER_TOTAL, P_OUTER_TOTAL, R_RISK_COEF,
                     R_STEP, RADARS, RISK_CACHE, ZONE_CACHE)
+
+# DIRS = ((-1,0),(0,1),(1,0),(0,-1)) -> UP, RIGHT, DOWN, LEFT
+DIR_KEYS = ("up", "right", "down", "left")
 
 # risk maliyetinin ADIM maliyeti cinsinden agirligi.
 # cost(hucre) = 1 + RISK_W * p_death(hucre)  [adim-esdegeri]
@@ -117,6 +120,26 @@ def direction_costs(z: np.ndarray, risk_w: float = RISK_W,
     cost["right"] = np.full((n, n), np.inf)
     cost["right"][:, :-1] = 1.0 + risk_w * move_risk(z[:, :-1], z[:, 1:], mode)
     return cost
+
+
+def oracle_action(pos, dist: np.ndarray, cost: dict, n: int) -> int:
+    """Bellman argmin: d[u] = min_v ( cost(u->v) + d[v] ).
+
+    KENAR maliyeti sart — bir halkaya girmek per_entry'de 1 + 1500*0.9 = 1351
+    adim-esdegeri. Sadece d[v]'ye bakmak (tepe inisi) yolu felakete surukler
+    (bkz. greedy_path'teki ayni hata). BC on-egitiminde (train_bc.py) VE
+    RL fine-tune sirasindaki oracle-capa (BC-anchored VDN, agents/vdn.py)
+    kaybinda ortak kullanilir — ikisi de AYNI uzmani taklit etmeli.
+    """
+    r, c = pos
+    best_a, best_v = 0, np.inf
+    for a, (dr, dc) in enumerate(DIRS):
+        nr, nc = r + dr, c + dc
+        if 0 <= nr < n and 0 <= nc < n:
+            v = float(cost[DIR_KEYS[a]][r, c]) + float(dist[nr, nc])
+            if v < best_v:
+                best_v, best_a = v, a
+    return best_a
 
 
 def _sweep(dist: np.ndarray, cost: dict) -> bool:

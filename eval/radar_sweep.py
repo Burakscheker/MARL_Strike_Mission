@@ -20,9 +20,10 @@ import numpy as np
 import config as C
 from env.sampler import eval_map_seeds
 from env.strike_env import StrikeMissionEnv
-from env.two_agent import play_episode, play_episode_qmix, play_episode_vdn
+from env.two_agent import play_episode_ppo, play_episode_qmix, play_episode_vdn
 
-RUNNER = {"iql": play_episode, "vdn": play_episode_vdn, "qmix": play_episode_qmix}
+RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
+         "vdn": play_episode_vdn, "qmix": play_episode_qmix}
 
 
 def sweep(agent, algo, radar_counts, n_maps=20, seed=12345):
@@ -51,7 +52,7 @@ def sweep(agent, algo, radar_counts, n_maps=20, seed=12345):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--algo", required=True, choices=("iql", "vdn", "qmix"))
+    ap.add_argument("--algo", required=True, choices=("mappo", "happo", "vdn", "qmix"))
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--maps", type=int, default=20)
     ap.add_argument("--radars", default="0,5,10,20,30")
@@ -59,12 +60,7 @@ def main():
 
     from train import build_agent
     agent = build_agent(args.algo, 0, "cpu")
-    if args.algo == "iql":
-        stem = args.ckpt.replace("_agent1.pt", "").replace(".pt", "")
-        agent[C.AGENT_1].load(f"{stem}_agent1.pt")
-        agent[C.AGENT_2].load(f"{stem}_agent2.pt")
-    else:
-        agent.load(args.ckpt)
+    agent.load(args.ckpt)
     print(f"model: {args.ckpt}   ({args.maps} harita, ZAR KAPALI)\n")
 
     opt = 2 * (C.GRID_N - 1)

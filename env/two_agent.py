@@ -12,6 +12,9 @@ olanlar NOOP'a duser — VDN/QMIX'in joint transition'i dogal olarak olusur.
 """
 from typing import Optional
 
+import numpy as np
+import torch
+
 from config import AGENT_1, AGENT_2, NOOP
 from env.strike_env import StrikeMissionEnv
 
@@ -163,5 +166,69 @@ def play_episode_qmix(env: StrikeMissionEnv, agent, train: bool,
                 losses.append(loss)
 
         obs = next_obs
+
+    return info, losses
+
+
+def play_episode_ppo(env: StrikeMissionEnv, agent, train: bool,
+                     config=None, reset_kwargs: Optional[dict] = None,
+                     health_probe: Optional[list] = None) -> tuple[dict, list]:
+    """MAPPO/HAPPO (agents/mappo_happo.py) — ON-POLICY, VDN/QMIX'ten FARKLI
+    dongu: her adimda push+learn() YOK, TAM episode toplanip agent.add_episode()
+    ile PPO'nun rollout biriktiricisine eklenir. Yeterli episode birikince
+    (config.PPO_ROLLOUT_EPISODES) o AN gerceklesen PPO guncellemesinin
+    kayiplari donuyor, aksi halde bos liste (VDN'in learn_start'a kadar
+    None donmesiyle AYNI cagri sozlesmesi — RUNNER dict'i her iki turu de
+    ayrim gozetmeden isleyebilsin diye).
+
+    health_probe: MAPPO/HAPPO'da anlamsiz (Q(obs,NOOP) kavrami yok, politika
+    LOGIT'i var) — kabul edilir ama kullanilmaz, RUNNER imzasi ayni kalsin diye.
+    """
+    obs = env.reset(config=config, **(reset_kwargs or {}))
+    ep = {name: [] for name in ("obs", "states", "masks", "actions",
+                                "old_logp", "rewards", "values", "alive")}
+    info: dict = {}
+    done = False
+
+    while not done:
+        state = env.state()
+        masks = np.stack([env.action_mask(AGENT_1), env.action_mask(AGENT_2)])
+        obs_arr = np.stack([obs[AGENT_1], obs[AGENT_2]])
+        alive = np.array([env.alive[AGENT_1], env.alive[AGENT_2]])
+
+        actions, old_logp, value = agent.act(obs_arr, masks, state,
+                                             deterministic=not train)
+        acts = {AGENT_1: int(actions[AGENT_1]), AGENT_2: int(actions[AGENT_2])}
+        next_obs, r_team, done, info = env.step(acts)
+
+        if train:
+            ep["obs"].append(obs_arr)
+            ep["states"].append(state)
+            ep["masks"].append(masks)
+            ep["actions"].append(actions)
+            ep["old_logp"].append(old_logp)
+            ep["rewards"].append(r_team)
+            ep["values"].append(value)
+            ep["alive"].append(alive)
+
+        obs = next_obs
+
+    losses: list = []
+    if train:
+        # Timeout GERCEK terminal degil (VDN/QMIX'teki AYNI zaman-siniri
+        # bootstrap ilkesi) — kritigin SON (post-step) state'inden bootstrap
+        # degeri alinir.
+        is_timeout = bool(info.get("timeout", False))
+        bootstrap_value = 0.0
+        if is_timeout:
+            with torch.no_grad():
+                final_state = torch.as_tensor(env.state(), dtype=torch.float32,
+                                             device=agent.device).unsqueeze(0)
+                bootstrap_value = float(agent.critic(final_state).item())
+        batch = agent.add_episode(ep, terminated_true=not is_timeout,
+                                  bootstrap_value=bootstrap_value)
+        if batch is not None:
+            update_losses = agent.update(batch)
+            losses = [update_losses["actor_loss"], update_losses["critic_loss"]]
 
     return info, losses

@@ -84,9 +84,10 @@ def staircase_path(n=C.GRID_N) -> list:
 
 def rollout(env, agent, algo: str, map_seed: int) -> dict:
     """Egitilmis ajani TEK haritada eps=0 ile kosur."""
-    from env.two_agent import play_episode, play_episode_qmix, play_episode_vdn
-    runner = {"iql": play_episode, "vdn": play_episode_vdn,
-              "qmix": play_episode_qmix}[algo]
+    from env.two_agent import (play_episode_ppo, play_episode_qmix,
+                               play_episode_vdn)
+    runner = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
+              "vdn": play_episode_vdn, "qmix": play_episode_qmix}[algo]
     info, _ = runner(env, agent, train=False,
                      reset_kwargs={"map_seed": map_seed, "n_radar": C.N_RADAR})
     return info
@@ -217,7 +218,7 @@ def summarize(rows: list, has_agent: bool) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--algo", default=None, choices=("iql", "vdn", "qmix"))
+    ap.add_argument("--algo", default=None, choices=("mappo", "happo", "vdn", "qmix"))
     ap.add_argument("--ckpt", default=None, help="egitilmis model (.pt)")
     ap.add_argument("--maps", type=int, default=C.EVAL_N_MAPS)
     ap.add_argument("--tag", default="eval")
@@ -231,17 +232,7 @@ def main():
             raise SystemExit("--ckpt ile --algo da gerekli")
         from train import build_agent
         agent = build_agent(args.algo, 0, "cpu")
-        if args.algo == "iql":
-            # IQL'in IKI AYRI agi var ve ayri dosyalara kaydediliyor.
-            # BUG (bulundu ve duzeltildi): eskiden sadece agent1 yukleniyordu,
-            # agent2 RASTGELE agirliklarla kaliyordu — yani IQL her zaman bir
-            # egitilmemis ucakla olculuyordu. Uc algoritmayi karsilastiran bir
-            # deneyde bu, IQL'i sistematik olarak haksiz yere batiriyordu.
-            stem = args.ckpt.replace("_agent1.pt", "").replace(".pt", "")
-            agent[C.AGENT_1].load(f"{stem}_agent1.pt")
-            agent[C.AGENT_2].load(f"{stem}_agent2.pt")
-        else:
-            agent.load(args.ckpt)
+        agent.load(args.ckpt)
         print(f"model yuklendi: {args.ckpt}")
     else:
         print("model YOK — sadece referans politikalar olculuyor")

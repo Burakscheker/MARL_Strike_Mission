@@ -29,9 +29,47 @@ import torch.nn as nn
 
 from agents.networks import build_qnet, masked_q
 from config import (HUBER_BETA, AGENT_1, AGENT_2, EPS_END, EPS_START, GAMMA, GRAD_CLIP,
-                    LEARN_EVERY, N_ACTIONS, OBS_DIM, VDN_BATCH, VDN_BUFFER,
-                    VDN_EPS_DECAY_STEPS, VDN_LEARN_START, VDN_LR,
-                    VDN_TARGET_UPDATE)
+                    LEARN_EVERY, N_ACTIONS, OBS_DIM, PER_ALPHA, PER_BETA_START,
+                    PER_EPS, VDN_BATCH, VDN_BUFFER, VDN_EPS_DECAY_STEPS,
+                    VDN_LEARN_START, VDN_LR, VDN_TARGET_UPDATE)
+
+
+class SumTree:
+    """Oncelikli deneyim tekrari (PER, Schaul ve ark. 2016) icin duz-dizi
+    toplam agaci: O(log N) orneklem + guncelleme. capacity 2'nin kuvveti
+    OLMAK ZORUNDA DEGIL — dugum i'nin cocuklari 2i/2i+1 kurali, "tam" bir
+    agac SEKLINE degil SADECE update()'in her dugumu cocuklarinin toplami
+    olarak dogru tutmasina dayanir (klasik segment-agaci esdegeri)."""
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.tree = np.zeros(2 * capacity, dtype=np.float64)
+        self.max_priority = 1.0
+
+    def update(self, idx: int, priority: float):
+        self.max_priority = max(self.max_priority, priority)
+        i = idx + self.capacity
+        delta = priority - self.tree[i]
+        self.tree[i] = priority
+        i //= 2
+        while i >= 1:
+            self.tree[i] += delta
+            i //= 2
+
+    def total(self) -> float:
+        return float(self.tree[1])
+
+    def get(self, s: float) -> int:
+        """s icin (0 <= s < total()) denk gelen yaprak INDEKSINI (0..capacity-1) dondurur."""
+        i = 1
+        while i < self.capacity:
+            left = 2 * i
+            if s <= self.tree[left]:
+                i = left
+            else:
+                s -= self.tree[left]
+                i = left + 1
+        return i - self.capacity
 
 
 class JointReplayBuffer:
@@ -43,9 +81,13 @@ class JointReplayBuffer:
     """
 
     def __init__(self, capacity: int, obs_dim: int, n_actions: int,
-                 rng: np.random.Generator | None = None):
+                 rng: np.random.Generator | None = None,
+                 prioritized: bool = False, alpha: float = PER_ALPHA):
         self.capacity = capacity
         self.rng = rng or np.random.default_rng()
+        self.prioritized = prioritized
+        self.alpha = alpha
+        self.tree = SumTree(capacity) if prioritized else None
         self.obs1 = np.zeros((capacity, obs_dim), dtype=np.float32)
         self.obs2 = np.zeros((capacity, obs_dim), dtype=np.float32)
         self.action1 = np.zeros(capacity, dtype=np.int64)
@@ -56,6 +98,12 @@ class JointReplayBuffer:
         self.next_mask1 = np.zeros((capacity, n_actions), dtype=np.float32)
         self.next_mask2 = np.zeros((capacity, n_actions), dtype=np.float32)
         self.done = np.zeros(capacity, dtype=np.float32)
+        # OGRETMEN-CAPASI (teacher-anchored VDN, bkz. VDNAgent.learn): o anki
+        # pozisyon icin Bellman-optimal uzman aksiyonu. -1 = ETIKET YOK (serial
+        # play_episode_vdn hic gondermez) — learn() bu satirlari BC kaybindan
+        # maskeler, TD kaybini etkilemez.
+        self.oracle_a1 = np.full(capacity, -1, dtype=np.int64)
+        self.oracle_a2 = np.full(capacity, -1, dtype=np.int64)
         self._i = 0
         self._full = False
 
@@ -63,7 +111,7 @@ class JointReplayBuffer:
         return self.capacity if self._full else self._i
 
     def push(self, obs1, a1, obs2, a2, reward, next_obs1, next_obs2, done,
-             next_mask1, next_mask2):
+             next_mask1, next_mask2, oracle_a1: int = -1, oracle_a2: int = -1):
         i = self._i
         self.obs1[i], self.obs2[i] = obs1, obs2
         self.action1[i], self.action2[i] = a1, a2
@@ -74,6 +122,13 @@ class JointReplayBuffer:
         # NEG_INF uretir; guvenlik icin 1'lerle doldur (agents/buffer.py ile ayni onlem).
         self.next_mask1[i] = np.ones_like(next_mask1) if done else next_mask1
         self.next_mask2[i] = np.ones_like(next_mask2) if done else next_mask2
+        self.oracle_a1[i], self.oracle_a2[i] = oracle_a1, oracle_a2
+        if self.prioritized:
+            # YENI gecis MAKSIMUM oncelikle girer — henuz TD-hatasi
+            # olculmedigi icin "once dene, sonra oncelik duzelt" (Schaul ve
+            # ark. standart pratigi), yoksa hic ornekelenmeden buffer'da
+            # sessizce eskiyebilir.
+            self.tree.update(i, self.tree.max_priority ** self.alpha)
         self._i = (i + 1) % self.capacity
         if self._i == 0:
             self._full = True
@@ -82,7 +137,39 @@ class JointReplayBuffer:
         idx = self.rng.integers(0, len(self), size=batch_size)
         return (self.obs1[idx], self.action1[idx], self.obs2[idx], self.action2[idx],
                 self.reward[idx], self.next_obs1[idx], self.next_obs2[idx],
-                self.done[idx], self.next_mask1[idx], self.next_mask2[idx])
+                self.done[idx], self.next_mask1[idx], self.next_mask2[idx],
+                self.oracle_a1[idx], self.oracle_a2[idx])
+
+    def sample_prioritized(self, batch_size: int, beta: float):
+        """Oncelik^alpha ile ORANTILI ornekleme (SumTree) + onyargi-duzeltme
+        agirliklari (IS weights, beta ile). Toplam kutle esit `batch_size`
+        dilime bolunup her dilimden BIR ornek cekilir (stratified) — saf
+        rastgele orneklemeden daha DUSUK varyansli, Schaul ve ark. standart
+        pratigi."""
+        n = len(self)
+        total = self.tree.total()
+        segment = total / batch_size
+        idx = np.empty(batch_size, dtype=np.int64)
+        for k in range(batch_size):
+            s = self.rng.uniform(segment * k, segment * (k + 1))
+            idx[k] = self.tree.get(min(s, total - 1e-6))
+        priorities = self.tree.tree[idx + self.capacity]
+        probs = priorities / total
+        weights = (n * probs) ** (-beta)
+        weights /= weights.max()
+        return (self.obs1[idx], self.action1[idx], self.obs2[idx], self.action2[idx],
+                self.reward[idx], self.next_obs1[idx], self.next_obs2[idx],
+                self.done[idx], self.next_mask1[idx], self.next_mask2[idx],
+                self.oracle_a1[idx], self.oracle_a2[idx],
+                idx, weights.astype(np.float32))
+
+    def update_priorities(self, idx: np.ndarray, td_errors: np.ndarray):
+        """learn() SONRASI cagrilir: yeni |TD-hatasi| -> oncelik^alpha.
+        PER_EPS: TD-hatasi TAM SIFIR olsa bile oncelik hicbir zaman 0 olmasin
+        (aksi halde o gecis BIR DAHA hic ornekelenmez)."""
+        p = (np.abs(td_errors) + PER_EPS) ** self.alpha
+        for i, pi in zip(idx, p):
+            self.tree.update(int(i), float(pi))
 
 
 class VDNAgent:
@@ -96,7 +183,9 @@ class VDNAgent:
                  buffer_size: int = VDN_BUFFER, batch_size: int = VDN_BATCH,
                  lr: float = VDN_LR, eps_decay_steps: int = VDN_EPS_DECAY_STEPS,
                  learn_start: int = VDN_LEARN_START,
-                 target_update: int = VDN_TARGET_UPDATE):
+                 target_update: int = VDN_TARGET_UPDATE,
+                 eps_end: float = EPS_END, dueling: bool = False,
+                 prioritized: bool = False):
         self.device = torch.device(device)
         self.n_actions = n_actions
         torch.manual_seed(seed)
@@ -106,11 +195,18 @@ class VDNAgent:
         self.eps_decay_steps = eps_decay_steps
         self.learn_start = learn_start
         self.target_update = target_update
+        self.eps_end = eps_end
+        # OGRETMEN-CAPASI agirligi (teacher-anchored VDN) — train.py episode
+        # basina ayarlar (set_bc_lambda), varsayilan 0.0 = kapali/eski davranis.
+        self.bc_lambda = 0.0
+        # PER importance-sampling agirligi — train.py episode basina anneal
+        # eder (bkz. set_per_beta). prioritized=False'ta hic kullanilmaz.
+        self.per_beta = PER_BETA_START
 
-        self.online = {AGENT_1: build_qnet(n_actions).to(self.device),
-                       AGENT_2: build_qnet(n_actions).to(self.device)}
-        self.target = {AGENT_1: build_qnet(n_actions).to(self.device),
-                       AGENT_2: build_qnet(n_actions).to(self.device)}
+        self.online = {AGENT_1: build_qnet(n_actions, dueling=dueling).to(self.device),
+                       AGENT_2: build_qnet(n_actions, dueling=dueling).to(self.device)}
+        self.target = {AGENT_1: build_qnet(n_actions, dueling=dueling).to(self.device),
+                       AGENT_2: build_qnet(n_actions, dueling=dueling).to(self.device)}
         for a in (AGENT_1, AGENT_2):
             self.target[a].load_state_dict(self.online[a].state_dict())
             self.target[a].eval()
@@ -118,7 +214,8 @@ class VDNAgent:
         params = (list(self.online[AGENT_1].parameters())
                  + list(self.online[AGENT_2].parameters()))
         self.opt = torch.optim.Adam(params, lr=lr)
-        self.buffer = JointReplayBuffer(buffer_size, obs_dim, n_actions, self.rng)
+        self.buffer = JointReplayBuffer(buffer_size, obs_dim, n_actions, self.rng,
+                                        prioritized=prioritized)
         self.steps = 0
         self.eps_progress: float | None = None   # bkz. eps / set_eps_progress
 
@@ -130,11 +227,25 @@ class VDNAgent:
         # adim-tabanli decay'in egitim uzunluguna gore sessizce bozulmasi).
         frac = (self.eps_progress if self.eps_progress is not None
                 else min(1.0, self.steps / self.eps_decay_steps))
-        return EPS_START + frac * (EPS_END - EPS_START)
+        return EPS_START + frac * (self.eps_end - EPS_START)
 
     def set_eps_progress(self, frac: float | None):
         """bkz. agents/dqn.py'deki ayni metod."""
         self.eps_progress = None if frac is None else min(1.0, max(0.0, frac))
+
+    def set_bc_lambda(self, lam: float):
+        """OGRETMEN-CAPASI agirligini ayarla (bkz. learn()). train.py episode
+        basina bir decay egrisiyle cagirir — dis inceleme onerisi: baslangicta
+        yuksek, egitim ilerledikce azalir ama SIFIRA HEMEN INMEZ (BC'nin
+        ogrettigi guvenli rotayi TD guncellemelerinin silmesini onlemek)."""
+        self.bc_lambda = max(0.0, lam)
+
+    def set_per_beta(self, beta: float):
+        """PER importance-sampling agirliginin ussu — egitim ilerledikce
+        PER_BETA_START'tan 1.0'a (tam onyargi duzeltmesi) anneal edilir
+        (Schaul ve ark. standart pratigi: erken egitimde biraz onyargi
+        kabul edilir, cunku oncelikler henuz guvenilir degildir)."""
+        self.per_beta = min(1.0, max(0.0, beta))
 
     def act(self, agent_id: int, obs: np.ndarray, mask: np.ndarray,
            eps: float | None = None) -> int:
@@ -142,13 +253,36 @@ class VDNAgent:
         legal = np.flatnonzero(mask)
         if len(legal) == 0:
             raise RuntimeError("gecerli aksiyon yok — ortam maskesi hatali")
-        if self.rng.random() < eps:
+        if eps > 0.0 and self.rng.random() < eps:
             return int(self.rng.choice(legal))
         with torch.no_grad():
             o = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
             m = torch.as_tensor(mask, dtype=torch.float32, device=self.device).unsqueeze(0)
             q = masked_q(self.online[agent_id](o), m)
             return int(q.argmax(dim=1).item())
+
+    def act_batch(self, agent_id: int, obs: np.ndarray, mask: np.ndarray,
+                 eps: float | None = None) -> np.ndarray:
+        """act()'in VEKTORIZE hali — N paralel ortam icin TEK forward pass
+        (bkz. env/vec_env.py). Epsilon-greedy HER SATIR icin BAGIMSIZ
+        uygulanir, ayni RNG akisindan (self.rng) — semantik act() ile AYNI,
+        sadece N ornegi tek cagrida isler."""
+        eps = self.eps if eps is None else eps
+        with torch.no_grad():
+            o = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
+            m = torch.as_tensor(mask, dtype=torch.float32, device=self.device)
+            q = masked_q(self.online[agent_id](o), m)
+            greedy = q.argmax(dim=1).cpu().numpy()
+        if eps <= 0.0:
+            return greedy
+        explore = self.rng.random(obs.shape[0]) < eps
+        if explore.any():
+            acts = greedy.copy()
+            for i in np.flatnonzero(explore):
+                legal = np.flatnonzero(mask[i])
+                acts[i] = self.rng.choice(legal)
+            return acts
+        return greedy
 
     def q_value(self, agent_id: int, obs: np.ndarray, action: int) -> float:
         """Tek (obs, aksiyon) icin online Q degeri — PLAN §Asama 5 saglik kontrolu:
@@ -167,8 +301,14 @@ class VDNAgent:
         if len(self.buffer) < self.learn_start or self.steps % LEARN_EVERY != 0:
             return None
 
-        (obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
-         nm1, nm2) = self.buffer.sample(self.batch_size)
+        per = self.buffer.prioritized
+        if per:
+            (obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
+             nm1, nm2, oa1, oa2, per_idx, is_w) = self.buffer.sample_prioritized(
+                self.batch_size, self.per_beta)
+        else:
+            (obs1, a1, obs2, a2, r, next_obs1, next_obs2, done,
+             nm1, nm2, oa1, oa2) = self.buffer.sample(self.batch_size)
         t = lambda x, dt=torch.float32: torch.as_tensor(x, dtype=dt, device=self.device)
         obs1, obs2 = t(obs1), t(obs2)
         next_obs1, next_obs2 = t(next_obs1), t(next_obs2)
@@ -176,8 +316,10 @@ class VDNAgent:
         r, done = t(r), t(done)
         nm1, nm2 = t(nm1), t(nm2)
 
-        q1 = self.online[AGENT_1](obs1).gather(1, a1.unsqueeze(1)).squeeze(1)
-        q2 = self.online[AGENT_2](obs2).gather(1, a2.unsqueeze(1)).squeeze(1)
+        q1_all = self.online[AGENT_1](obs1)
+        q2_all = self.online[AGENT_2](obs2)
+        q1 = q1_all.gather(1, a1.unsqueeze(1)).squeeze(1)
+        q2 = q2_all.gather(1, a2.unsqueeze(1)).squeeze(1)
         q_tot = q1 + q2                              # VDN: toplamsal ayristirma
 
         with torch.no_grad():
@@ -188,7 +330,39 @@ class VDNAgent:
             nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
             target_val = r + GAMMA * (nq1 + nq2) * (1.0 - done)
 
-        loss = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA)
+        if per:
+            # ONCELIKLI DENEYIM TEKRARI (PER, 2026-08-26): elementwise kayip,
+            # IS agirligiyla carpilip ORTALANIR (Schaul ve ark. — sik
+            # ornekelenen gecisler gradyanda ONYARGI yaratmasin diye
+            # kucultulur). Oncelikler backward'dan SONRA, GERCEK |TD-hatasi|
+            # ile guncellenir (bkz. asagida).
+            td_elem = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA,
+                                                    reduction="none")
+            is_w_t = t(is_w)
+            loss_td = (td_elem * is_w_t).mean()
+        else:
+            loss_td = nn.functional.smooth_l1_loss(q_tot, target_val, beta=HUBER_BETA)
+
+        loss = loss_td
+        # OGRETMEN-CAPASI (teacher-anchored VDN, dis inceleme onerisi,
+        # 2026-08-26): vanilla BC->RL fine-tune COKTU (ep25'te mission_prob
+        # 0.0001) cunku BC cross-entropy'yle egitildigi icin cikis olcegi
+        # gercek Q-degerleriyle (ort. 17-37) uyumsuz — normal TD guncellemesi
+        # bu olcegi ilk birkac yuz adimda agresifce yeniden kalibre ederken
+        # BC'nin ogrendigi ince aksiyon siralamasini siliyordu. Cozum: TD
+        # kaybina SUREKLI oracle-capraz-entropi eklemek, boylece ag hem
+        # odulden ogrenir hem de her adimda uzman aksiyonundan cok uzaklasamaz.
+        # bc_lambda=0.0 (varsayilan) -> eski davranisla BIREBIR AYNI.
+        if self.bc_lambda > 0.0:
+            oa1_t, oa2_t = t(oa1, torch.int64), t(oa2, torch.int64)
+            v1, v2 = oa1_t >= 0, oa2_t >= 0
+            loss_bc = obs1.new_zeros(())
+            if v1.any():
+                loss_bc = loss_bc + nn.functional.cross_entropy(q1_all[v1], oa1_t[v1])
+            if v2.any():
+                loss_bc = loss_bc + nn.functional.cross_entropy(q2_all[v2], oa2_t[v2])
+            loss = loss_td + self.bc_lambda * loss_bc
+
         self.opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(
@@ -196,10 +370,16 @@ class VDNAgent:
             GRAD_CLIP)
         self.opt.step()
 
+        if per:
+            with torch.no_grad():
+                new_td = (q_tot - target_val).abs().cpu().numpy()
+            self.buffer.update_priorities(per_idx, new_td)
+
         if self.steps % self.target_update == 0:
             self.target[AGENT_1].load_state_dict(self.online[AGENT_1].state_dict())
             self.target[AGENT_2].load_state_dict(self.online[AGENT_2].state_dict())
-        return float(loss.item())
+        # loglanan kayip TD-kismi: BC-capali/capasiz kosular karsilastirilabilir kalsin.
+        return float(loss_td.item())
 
     # ------------------------------------------------------------- kayit
 

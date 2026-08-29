@@ -46,10 +46,6 @@ from config import PATHFINDING_CKPT_DIR
 # olmuyordu. `*_bfs_*` ve `*_obs_hard` etiketleri 16-skalarli (BFS mesafe
 # skalarlari eklendikten sonraki) donemden — once onlar denenmeli.
 DEFAULT_SOURCE = {
-    "dqn": ["iql_bfs_medium_agent1.pt", "iql_obs_hard_agent1.pt",
-            "iql_final_agent1.pt", "dqn.pt"],
-    "iql": ["iql_bfs_medium_agent1.pt", "iql_obs_hard_agent1.pt",
-            "iql_final_agent1.pt"],
     "vdn": ["vdn_bfs_medium.pt", "vdn_obs_hard.pt", "vdn_bfs_hard.pt",
             "vdn_final.pt"],
     "qmix": ["qmix_bfs_medium.pt", "qmix_obs_hard.pt", "qmix_bfs_hard.pt",
@@ -140,29 +136,6 @@ def print_report(reports: list[dict], source_path: str):
     print("---\n")
 
 
-def resume_dqn(agent, path: str, head_reset: bool = False):
-    ckpt = torch.load(path, map_location="cpu")
-    src = ckpt.get("online", ckpt.get("online1", ckpt))
-    rep = [load_matching(agent.online, src, "online", head_reset)]
-    agent.target.load_state_dict(agent.online.state_dict())
-    print_report(rep, path)
-
-
-def resume_iql(agents: dict, path1: str, path2: str | None = None,
-               head_reset: bool = False):
-    from config import AGENT_1, AGENT_2
-    path2 = path2 or path1.replace("agent1", "agent2")
-    reports = []
-    for a, p, lab in ((AGENT_1, path1, "A1"), (AGENT_2, path2, "A2")):
-        if not os.path.exists(p):
-            p = path1                          # tek dosya varsa ikisine de ayni
-        ckpt = torch.load(p, map_location="cpu")
-        src = ckpt.get("online", ckpt.get("online1", ckpt))
-        reports.append(load_matching(agents[a].online, src, lab, head_reset))
-        agents[a].target.load_state_dict(agents[a].online.state_dict())
-    print_report(reports, f"{path1} + {path2}")
-
-
 def resume_vdn(agent, path: str, head_reset: bool = False):
     from config import AGENT_1, AGENT_2
     ckpt = torch.load(path, map_location="cpu")
@@ -200,11 +173,7 @@ def resume_qmix(agent, path: str, head_reset: bool = False,
 
 def resume(algo: str, agent_or_agents, path: str, head_reset: bool = False,
            load_mixer: bool = True):
-    if algo == "dqn":
-        resume_dqn(agent_or_agents, path, head_reset)
-    elif algo == "iql":
-        resume_iql(agent_or_agents, path, None, head_reset)
-    elif algo == "vdn":
+    if algo == "vdn":
         resume_vdn(agent_or_agents, path, head_reset)
     elif algo == "qmix":
         resume_qmix(agent_or_agents, path, head_reset, load_mixer)

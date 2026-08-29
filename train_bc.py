@@ -34,30 +34,9 @@ import torch.nn as nn
 
 import config as C
 from agents.vdn import VDNAgent
-from baselines.risk_oracle import RISK_W, direction_costs
+from baselines.risk_oracle import RISK_W, direction_costs, oracle_action
 from env.sampler import curriculum_n_radar
 from env.strike_env import StrikeMissionEnv
-
-# DIRS = ((-1,0),(0,1),(1,0),(0,-1)) -> UP, RIGHT, DOWN, LEFT
-DIR_KEYS = ("up", "right", "down", "left")
-
-
-def oracle_action(pos, dist: np.ndarray, cost: dict, n: int) -> int:
-    """Bellman argmin: d[u] = min_v ( cost(u->v) + d[v] ).
-
-    KENAR maliyeti sart — bir halkaya girmek per_entry'de 1 + 1500*0.9 = 1351
-    adim-esdegeri. Sadece d[v]'ye bakmak (tepe inisi) yolu felakete surukler
-    (bkz. greedy_path'teki ayni hata).
-    """
-    r, c = pos
-    best_a, best_v = 0, np.inf
-    for a, (dr, dc) in enumerate(C.DIRS):
-        nr, nc = r + dr, c + dc
-        if 0 <= nr < n and 0 <= nc < n:
-            v = float(cost[DIR_KEYS[a]][r, c]) + float(dist[nr, nc])
-            if v < best_v:
-                best_v, best_a = v, a
-    return best_a
 
 
 def collect_episode(env, eps: float, rng, stride: int, n_radar: int,

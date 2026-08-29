@@ -47,14 +47,18 @@ RADARS = ((280, 220), (400, 700), (780, 400))
 # KARSILASTIRILAMAZ. Harita zorlugu ve eval seti degisti; o tablo "40 radar"
 # etiketiyle arsivde kalir.
 RADAR_RANDOM = True
-N_RADAR = 30
+# 30 -> 25 (2026-08-19, Burak): VDN'in 8000-adim/tohum1 sonucu sonrasi radar
+# sayisi geri dusuruldu. ms3ks1_vdn8k_r25 checkpoint'i BU deger (25) ile
+# egitildi/degerlendirildi — 30'a geri donersek checkpoint uyumsuz haritada
+# olculur (daha zor, daha kotu sonuc cikar, YANLIS kiyas).
+N_RADAR = 25
 
 # Curriculum: erken egitimde seyrek harita (bol pozitif ornek), sonra yogun.
 # Olculdu (baselines/scan_random_maps): 10 radarda oracle tavani %92.5 ve
 # medyan %100. Yogun uctan SIFIRDAN baslamak neredeyse hic basarili episode
 # gormemek demek. END degeri N_RADAR ile birlikte guncellenmeli.
 CURRICULUM_RADAR_START = 10
-CURRICULUM_RADAR_END = 30
+CURRICULUM_RADAR_END = 25
 CURRICULUM_FRAC = 0.6          # egitimin bu kesrinde END'e ulasir
 
 # DEGERLENDIRME her zaman N_RADAR'da ve SABIT tohumlu ORTAK harita setinde.
@@ -102,9 +106,33 @@ INNER_HALF = 50
 #             6000 -> surv_ratio %32.0  VARIS %72  timeout %28
 # 4000 tatli nokta olarak secilmisti. Sonra Burak: "Tolga'nin projesinde
 # MAX_STEPS 3000, bizde de oyle olsun" -- iki proje arasi kiyaslanabilirlik
-# icin 3000'e cekildi. 4000'e gore beklenen bedel: yukaridaki egriye gore
-# surv_ratio 4000 ile 2800 arasi bir yere duser (henuz olculmedi).
-MAX_STEPS = 3000
+# icin 3000'e cekildi.
+#
+# 3000 -> 8000 (2026-08-08..24). Sonraki MAX_STEPS taramasinda (2800/3000/
+# 4000/6000/8000/10000/12000) 8000 yerel optimum bulundu ve BUTUN GPU/
+# paralel-rollout kosulari (bu oturumun tamami) `--max-steps 8000` CLI
+# bayragiyla calisti — ama bu SABIT (config.MAX_STEPS) hep 3000'de KALDI.
+#
+# BULUNAN KRITIK BUG (2026-08-25, dis inceleme + dogrudan dogrulandi):
+# tests/test_env.py'deki intihar-kapisi testi C.MAX_STEPS (3000) uzerinden
+# kontrol ediyordu, GERCEKTE kullanilan 8000 degil. Hesap:
+#     MAX_STEPS=3000: intihar=-100  timeout=-80   KAPALI (guvenli)
+#     MAX_STEPS=8000: intihar=-100  timeout=-130  ACIK — intihar 30 puan
+#                     DAHA KARLI CIKIYORDU
+# Yani bu oturumdaki TUM egitimler (transfer/scratch/batch128 dahil) bu
+# acik kapiyla kosmus olabilir — gozlenen surekli yuksek olum orani
+# (olu(ma) 1.2-2.0) ve kaotik osilasyonun bir kismi BUNDAN kaynaklanmis
+# olabilir. MAX_STEPS artik GERCEKTEN kullanilan degere (8000) cekildi ki
+# testler CLI'dan BAGIMSIZ olarak gercek konfigurasyonu dogrulasin;
+# R_ALL_DEAD asagida buna gore yeniden kalibre edildi.
+#
+# 8000 -> 4000 (2026-08-28, Burak'in istegi): 4-algoritma (VDN/QMIX/MAPPO/
+# HAPPO) kiyasini HIZLANDIRMAK icin — kotu bir politika bile en fazla 4000
+# adimda timeout yer, MARL-pathtfinding referansiyla ayni deger. Intihar
+# kapisi (Kapi 2) YENIDEN KONTROL EDILDI: 2*R_DEATH+R_ALL_DEAD=-140 <=
+# R_TIMEOUT+MAX_STEPS*R_STEP=-50+4000*(-0.01)=-90 — HALA saglaniyor (marj
+# 10'dan 50'ye CIKTI, daha guvenli), R_ALL_DEAD'e dokunmaya GEREK YOK.
+MAX_STEPS = 4000
 
 # ---------------------------------------------------------------- risk modeli
 # Strike_Mission.md §0.2: ADIM BASI hazard. Burak'in verdigi %20/%90 "bolgeyi
@@ -156,6 +184,23 @@ R_DEATH = -15.0                # bir ucak dusuruldu
 R_FIRST_GOAL = +50.0           # ILK ucak hedefe vardi -> takim odulu FULL
 R_SECOND_GOAL = +12.0          # ikinci ucak da vardi ("ikide olsa" bonusu)
 
+# SIKISMA CEZASI (2026-08-20, Burak): "cok kolay" (risksiz) haritalarda bile
+# ajan BASLANGICIN hemen yaninda TIKANIP KALIYORDU — fiziksel engel yokken
+# bile 8000 adimin tamamini ilerlemeden harciyordu (bkz. viz/plot_easy_fail.py
+# ciktisi). R_STEP zaten var olan (kucuk) bir "burada durmanin bedeli var"
+# sinyaliydi ama yeterince keskin degildi. Bu, START'in STUCK_BOX x STUCK_BOX
+# kutusu icinde STUCK_GRACE_STEPS'ten fazla kalinirsa HER ADIM ek bir ceza —
+# temkinliligi (loitering) doğrudan cezalandirir, kacinmayi degil.
+STUCK_GRACE_STEPS = 30
+STUCK_BOX = 10                 # START'tan itibaren satir/sutun genisligi
+# STUCK_WINDOW: ceza SINIRSIZ birikmez — grace suresinden sonra en fazla bu
+# kadar adim boyunca uygulanir (sonra durur). SINIRSIZ olsaydi 8000 adimlik
+# bir episode'da toplam -0.5*7970*2 = ~-8000'e kadar cikar, R_TIMEOUT (-50)
+# / R_ALL_DEAD (-70) / R_DEATH (-15) yaninda anlamsizca buyurdu ve odul
+# olcegini bozardi (bu projede zaten olcek/sapma sorunlari yasadik).
+STUCK_WINDOW = 200
+R_STUCK = -0.5                 # R_STEP'in 50 kati, pencere icinde HER ADIM
+
 # --- ODUL HACKLEME KAPILARI (Strike_Mission.md §11.8) ---------------------
 # Asagidaki iki deger BIRLIKTE ayarlanir; tek basina degistirmek bir acik
 # acar. Rastgele haritada tavan dustugu icin (medyan oracle %7.2) ajanin
@@ -188,13 +233,17 @@ R_TIMEOUT = -50.0              # hicbiri varmadan sure doldu
 # ("deneyip yolda olen" ~ +120*ilerleme) haritayi kat eden ajan hic
 # denemeyenden cok daha yuksek puan alir. Cezalandirilan sey KASTEN erken
 # bitirmek.
-R_ALL_DEAD = -70.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
-# NOT — R_ALL_DEAD MAX_STEPS'E BAGLI, ikisi BIRLIKTE degistirilir:
-# MAX_STEPS 2800 -> 4000 yapilinca oyalanmanin maliyeti -78'den -90'a cikti
-# ve -50 ile kapi YENIDEN ACILDI (intihar -80 < oyalanma -90 = karli).
-#   -70 ile: 2*(-15) + (-70) = -100 <= -50 + 4000*(-0.01) = -90  -> KAPALI
-# 10 puan marj var. MAX_STEPS bir daha degisirse bu esitsizlik tekrar
-# kontrol edilmeli (tests/test_env.py otomatik dogruluyor).
+# -70 -> -110 (2026-08-25): MAX_STEPS 3000->8000 olunca (yukarida) bu kapi
+# SESSIZCE ACILMISTI — -70 ile 2*(-15)+(-70)=-100, oyalanma ise
+# -50+8000*(-0.01)=-130; -100 > -130 yani INTIHAR 30 PUAN KARLIYDI. Bu
+# oturumdaki TUM 8000-adim kosulari (transfer/scratch/batch128) bu acik
+# kapiyla calisti. -110 ile: 2*(-15)+(-110)=-140 <= -130 -> KAPALI, 10
+# puan marj (MAX_STEPS 4000'deki stilin ayni orani). MAX_STEPS bir daha
+# degisirse bu esitsizlik tekrar kontrol edilmeli (tests/test_env.py
+# otomatik dogruluyor — ama SADECE calisirken kullanilan C.MAX_STEPS icin;
+# CLI --max-steps ile FARKLI bir deger geciyorsan bu testi KORUMAZ, bkz.
+# yukaridaki MAX_STEPS notu).
+R_ALL_DEAD = -110.0            # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 
 # Adim basi risk maliyeti = R_RISK_COEF * p_death(hucre). Seyrek/gurultulu
 # olum sinyalini yogun/deterministik hale getirir. 0.0 -> kapali.
@@ -238,6 +287,30 @@ R_ALL_DEAD = -70.0             # ikisi de dusuruldu (R_DEATH'lerin USTUNE)
 # 1500 -> 6500. Oracle daha cok dolasir, yani tavan da degisir; eski
 # surv_ratio sayilariyla dogrudan kiyaslanamaz.
 R_RISK_COEF = 65.0
+
+# GEREKSIZ RISK CEZASI (2026-08-21, Burak'in gozlemi): basarisiz haritalari
+# tek tek izlerken ucaklarin bos/guvenli alanda "durup dururken" bir halkaya
+# girdigi goruldu. viz/analyze_unforced_deaths.py ile OLCULDU: %40
+# checkpoint'te (ms3ks1_vdn8k_r25) 100 haritada 88 olumun 71'i (%81) GIRIS
+# anindaki eski pozisyondan zonu ARTIRMAYAN GERCEK bir alternatif yon
+# varken oldu (46'si dogrudan tamamen guvenli bolgeden). Yani cogu olum
+# haritanin zorlamasi degil, politikanin GEREKSIZ tercihi.
+#
+# R_RISK_COEF'i buyutmek (120 denendi) BLANKET bir mudahale oldugu icin
+# kolay haritalarda bile cökuse yol acti (§ yukarida). Bu ceza ONA GORE
+# FARKLI: SADECE "kacinilabilir giris" anini hedefler (bkz.
+# StrikeMissionEnv._unnecessary_entry) — haritanin geregi olan zorunlu
+# geciscleri etkilemez, cunku alternatif yoksa hic tetiklenmez.
+#
+# Buyukluk: mevcut R_DEATH(-15)/R_TIMEOUT(-50) ile ayni mertebede secildi,
+# dis halka girisini (13 -> 33) hem ic halka girisini (58.5 -> 78.5)
+# belirgin sekilde daha maliyetli yapar. HENUZ EGITILMEDI/OLCULMEDI —
+# ODUL GORUNURLUGU notundaki (yukarida) Huber-doygunlugu riski gecerli:
+# bu da nispeten SEYREK bir olay (ep basi ~0.7-0.9), R_ALL_DEAD'in 200x
+# buyutulup TRAJEKTORIYI HIC degistirmedigi durumla ayni kaderi paylasabilir.
+# Egitim sonrasi ayni script ile (once/sonra) kacinilabilir-giris orani
+# olculup DOGRULANMALI.
+R_UNNECESSARY_RISK = 20.0
 
 # ---------------------------------------------------------------- egitim (ortak)
 SEED = 0
@@ -304,6 +377,16 @@ LEARN_EVERY = 8
 # Yani "nadir terminal odulu gorunur kilmak" icin "her adimda ogrenilen
 # sinyali" feda etmek olurdu. Dogru cozum bu degil (bkz. R_RISK_COEF notu):
 # riski SEYREK/stokastik kanaldan degil YOGUN kanaldan tasimak.
+# 1.0/1.0 -> 0.05/50.0 DENENDI VE GERI ALINDI (2026-08-21/22). Dogrudan
+# olculdu (tests/test_reward_visible.py, beta=2,5,10,25 eklendi): SADECE
+# HUBER_BETA'yi buyutmek odulu gorunmez birakiyordu; SADECE REWARD_SCALE=
+# 0.05+HUBER_BETA=50 BIRLIKTE odul buyuklugunu gorunur kildi. Ama bunu telafi
+# etmek icin gereken VDN_LR artisi (asagida ayrintili) UC AYRI tam 500-episode
+# kosuda da basarisiz oldu: LR=1e-2 pervasiz olum (olu(ma) 2.00'a kilitlendi,
+# gorev en iyi 0.10), LR=1e-3 donuk/timeout (gorev en iyi 0.045, 10 evaldan
+# 8'i 0.0000). Iki UC LR'de iki TAMAMEN ZIT basarisizlik modu — dar aralikta
+# "dogru" bir LR olmadiginin guclu isareti. Eski %40 checkpoint'in tarifine
+# (1.0/1.0) GERI DONULDU.
 REWARD_SCALE = 1.0             # 1.0 = kapali
 HUBER_BETA = 1.0               # torch varsayilani
 
@@ -316,31 +399,6 @@ SHAPING_COEF = 120.0
 EPS_START, EPS_END = 1.0, 0.05
 EPS_FLOOR_FRAC = 0.5           # epsilon egitimin bu KESRINDE tabana iner
 
-# ---------------------------------------------------------------- DQN (Asama 3)
-DQN_EPISODES = 3_000
-DQN_BUFFER = 200_000
-DQN_BATCH = 32
-DQN_EPS_DECAY_STEPS = 200_000
-DQN_LEARN_START = 2_000
-DQN_LR = 1e-4
-DQN_TARGET_UPDATE = 2_000
-DQN_EVAL_EVERY = 250
-
-# ---------------------------------------------------------------- IQL (Asama 4)
-IQL_EPISODES = 2_000
-# BELLEK: buffer satiri = OBS_DIM(898) x 4 byte x 2 dizi (obs + next_obs)
-# = 7.2 KB. 150k satir = 1.08 GB, ajan basina -> IQL toplam ~2.2 GB.
-# (MARL-Pathfinding'de ayni hesapla 100k kullaniliyordu; episode'lar orada
-# ~180 adimdi, burada ~2000 — ayni sayida episode cok daha fazla transition
-# uretiyor, o yuzden buffer'in kapsadigi episode penceresi kacinilmaz dar.)
-IQL_BUFFER = 150_000
-IQL_BATCH = 32
-IQL_EPS_DECAY_STEPS = 1_000_000
-IQL_LEARN_START = 2_000
-IQL_LR = 1e-4
-IQL_TARGET_UPDATE = 2_000
-IQL_EVAL_EVERY = 250
-
 TRAIN_HARM_WINDOW = 100
 TRAIN_HARM_LOG_EVERY = 25
 DEMO_EPISODES = 10
@@ -350,16 +408,76 @@ DEMO_SEED = 777
 # DIKKAT: LR ve TARGET_UPDATE degerleri MARL-Pathfinding'de 3 ayri tam-olcekli
 # kosuyu cokerttikten sonra bulundu (1e-4 + 2000 -> ep~1750'de tepe yapip
 # cokme; 3e-5 + 4000 -> 12000 episode monoton yukselis, hic cokme yok).
-# Degistirmeden egitme.
+# Degistirmeden egitme — ISTISNA asagida (REWARD_SCALE/HUBER_BETA degisimi
+# icin BILEREK degistirildi).
 VDN_EPISODES = 2_000
 # BELLEK: joint satir = 4 x OBS_DIM x 4 byte = 14.4 KB (obs1,obs2 + next'leri).
-# 120k satir = 1.72 GB.
-VDN_BUFFER = 120_000           # ortak (joint) transition — her satir BIR global timestep
-VDN_BATCH = 32
+# 250k satir = 3.6 GB.
+#
+# 120k -> 250k, 32 -> 128 (2026-08-24, Burak: "batch/buffer buyuklugunu
+# artir"). GEREKCE: ince-tarama (eval_every=25) ile GORULEN sey (bkz.
+# yukaridaki VDN_EVAL_EVERY notu) "erken zirve, yavas cokme" degil, HER 25
+# episode'da 0.00-0.40 arasi KAOTIK ZIPLAMA + her tohumda ep500'de cokusdu.
+# Bu, gradyan tahmininin YUKSEK VARYANSLI oldugunun klasik belirtisi —
+# batch=32 kucuk bir orneklemden TD hedefi tahmin ediyor, her learn()
+# cagrisi farkli (gurultulu) bir yone iteliyor olabilir. Buyuk batch bu
+# varyansi azaltir (istatistiksel olarak ~sqrt(4)=2x daha az gurultu).
+# VDN_BUFFER da orantili buyutuldu — n_envs=32 paralel toplama buffer'i
+# eskisinden HIZLI dolduruyor, daha genis bir pencere daha CESITLI (daha az
+# birbirine bagimli) ornekleme saglar.
+VDN_BUFFER = 250_000           # ortak (joint) transition — her satir BIR global timestep
+VDN_BATCH = 128
 VDN_EPS_DECAY_STEPS = 2_000_000
 VDN_LEARN_START = 2_000
+# 3e-5 -> 1e-2 DENENDI VE GERI ALINDI (2026-08-22): 25-episode kisa prob
+# temiz gorunmustu (loss max 1.14, q_max sinirli) ama TAM 500 episode'da
+# KATASTROFIK cikti — olu(ma) ep300'den itibaren 2.00'a KILITLENDI (HER
+# episode'da iki ucak da olduruyor), en iyi mission_prob sadece 0.10 (eski
+# %40 checkpoint'in 0.34'unun cok altinda). VARIS (zar kapali rota) %78-98
+# gibi YUKSEK gorunuyordu ama YANILTICIYDI — ajan rotayi "biliyor" ama zar
+# acikken pervasizca riske giriyordu. Kisa prob'un "aninda patlamiyor"
+# sonucu "uzun vadede stabil" ANLAMINA GELMIYORMUS — tam da yukarida
+# uyarilan risk gerceklesti.
+#
+# 1e-2 -> 1e-3 DE DENENDI VE GERI ALINDI (2026-08-22): 25-episode prob temiz
+# gorunmustu (loss max 0.058) ama tam 500 episode'da TAM TERSI yonde
+# basarisiz oldu — bu sefer politika DONDU/timeout yedi (10 evaldan 8'i
+# gorev=0.0000, demo'da 10 episode'un 6'si 8000 adimin tamamini
+# kullanip hicbir sey yapmadan bitiyordu). Iki uc LR de basarisiz, ikisi de
+# ZIT yonlerde (pervasizlik vs donukluk) — REWARD_SCALE/HUBER_BETA degisimi
+# TAMAMEN TERK EDILDI, eski (1.0/1.0) degerlere donuldu (yukarida).
+# 3e-5'e GERI DONULDU — eski %40 checkpoint'in (ms3ks1_vdn8k_r25) tarifi.
 VDN_LR = 3e-5
 VDN_TARGET_UPDATE = 4_000
+
+# OGRETMEN-CAPASI (teacher-anchored VDN, 2026-08-26, dis inceleme onerisi):
+# vanilla BC->TD fine-tune (train_bc.py cikisindan --resume-from ile devam)
+# COKTU — 25 episode'da mission_prob 0.0001'e dustu (BC-oncesi: %42 takim,
+# %98 VARIS). Sebep: BC cross-entropy'yle egitildigi icin cikis olcegi
+# gercek Q-degerleriyle (ort. 17-37, aksiyon-farki 0.05-0.1) uyumsuz;
+# normal TD guncellemesi bu olcegi ilk birkac yuz adimda yeniden kalibre
+# ederken BC'nin ogrendigi siralamayi siliyordu. Cozum: TD kaybina SUREKLI
+# oracle-capraz-entropi eklemek (agents/vdn.py VDNAgent.learn), lambda
+# baslangicta baskin, egitim ilerledikce azalir ama SIFIRA INMEZ (taban
+# > 0 -- BC'nin ogrettigi guvenli rota bilgisi RL guncellemeleri tarafindan
+# TAMAMEN silinmesin diye).
+VDN_BC_LAMBDA_START = 1.0
+VDN_BC_LAMBDA_END = 0.1
+VDN_BC_LAMBDA_DECAY_FRAC = 0.5   # EPS_FLOOR_FRAC ile ayni ritimde taban deger
+
+# DUELING + ONCELIKLI DENEYIM TEKRARI (PER, Schaul ve ark. 2016 / Wang ve
+# ark. 2016) — 2026-08-26, SAF RL denemesi (BC/oracle YOK, uc ayri BC->RL
+# fine-tune denemesi basarisiz oldu). Motivasyon: cokme deseninde HER
+# SEFERINDE Q'nun MUTLAK OLCEGI (V) degisirken aksiyonlar ARASI SIRALAMA
+# (A, action-gap 0.05-0.1) siliniyordu (bkz. §11.14 q_gap notu) — Dueling
+# ikisini mimari olarak ayirir (agents/networks.py). Ayrica 250k uniform
+# buffer'da NADIR ama KRITIK gecisler (olum, varis, riskli giris) binlerce
+# siradan adima seyreliyor — PER bunlari TD-hatasi buyuklugune gore daha
+# sik ornekler (agents/vdn.py SumTree).
+PER_ALPHA = 0.6            # oncelik ussu (0=uniform, 1=tam-orantili)
+PER_BETA_START = 0.4       # importance-sampling agirligi baslangici
+PER_BETA_END = 1.0         # egitim sonunda ONYARGISIZ (tam duzeltilmis)
+PER_EPS = 1e-3             # sifir-hatali gecisler icin taban oncelik (asla 0 olmasin)
 # DENEY (2026-08-16) DENENDI VE GERI ALINDI: q_mean hicbir egitimde
 # duzlemiyor, surekli artiyor (3.6->19.4 ilk 1000ep, devaminda 24.5'e) ve
 # loss da AYNI YONDE artiyor. Hipotez: VDN_TARGET_UPDATE=4000 HAM ADIM,
@@ -375,7 +493,33 @@ VDN_TARGET_UPDATE = 4_000
 # online'i kovaliyor, TD regresyonunun ihtiyac duydugu SABIT referans
 # ortadan kalkiyor. Sert senkrona geri donuldu; ıraksama kabul edilip
 # mission_prob-birincil checkpoint secimiyle en iyi nokta yakalaniyor.
-VDN_EVAL_EVERY = 250
+# 250 -> 50 -> 100 -> 50 (2026-08-21, Burak): VDN erken zirve yapip sonra
+# bozuluyor, 250'lik aralikta sadece 2 eval noktasi gercek zirveyi
+# KACIRABILIR. Once 50'ye cekildi, ama evaluate() TEK-ortam/batch=1
+# yolunu kullandigi icin PAHALI cikti (eval basina ~16 dk GPU'da, n_envs=32
+# egitimle ayni surecte) — 100'e geri cekilmisti. Sonra evaluate() de
+# vdn_vec_evaluate() ile PARALEL/batch'li hale getirildi (bkz. train.py) —
+# OLCULDU: eval ~16 dk -> ~3.9 dk (4.1x). Bu maliyeti dusurdugu icin 50'ye
+# GERI DONULDU: 10 eval noktasi x ~4dk ≈ 40 dk ek yuk, toplam kosu ~1.8
+# saat — 250'in 5 kati cozunurluk, makul maliyetle.
+#
+# 50 -> 25 (2026-08-22, Burak): ms5_vdn8k_gpu32 kosusunda egitim-ici
+# takim(ma) ep275'te %59'a cikmisti ama en yakin GERCEK (held-out) eval
+# noktalari ep250 (%28) ve ep300 (%38) idi — arada ne oldugunu bilmiyoruz.
+# eval artik ucuz oldugu icin (bkz. yukarida) o bandi daha ince taramak
+# icin 25'e cekildi: 20 eval noktasi x ~4dk ≈ 80dk ek yuk, toplam ~2.5 saat.
+#
+# GUVENLIK NOTU (eval_every DEGERININ KENDISI artik egitim yorungesini
+# ETKILEMIYOR): daha once "eval_every 250->50 degistirince sonuclar tamamen
+# degisti" diye BULUNMUSTU ama sebep eval_every DEGILDI — o kosu YANLISLIKLA
+# farkli thread sayisiyla da calismisti (MKL/OpenMP thread-sayisina bagli
+# farkli yuvarlama -> farkli egitim yorungesi) VE evaluate() egitim
+# env'inin RNG'sini SIZDIRIYORDU (bulunup duzeltildi, bkz. train.py
+# evaluate() saved_rng notu). Simdi eval eps=0 kullandigi icin agent.rng'yi
+# HIC tuketmiyor (eps>0.0 guard'i sayesinde) ve vdn_vec_evaluate() ayrı env
+# nesneleri kullaniyor — evaluate() egitim yorungesine artik hicbir
+# sekilde DOKUNMUYOR, sadece SURESI degisiyor.
+VDN_EVAL_EVERY = 25
 
 # ---------------------------------------------------------------- QMIX (Asama 7)
 QMIX_EPISODES = 2_000
@@ -390,13 +534,47 @@ QMIX_TARGET_UPDATE = 4_000
 QMIX_EVAL_EVERY = 250
 QMIX_MIXER_EMBED = 32
 
+# ---------------------------------------------------------------- MAPPO / HAPPO
+# 2026-08-28: euzxx/MARL-pathtfinding (mappo_happo dali) agents/ppo.py'den
+# PORTLANDI. IQL bu degisiklikle KALDIRILDI — VDN/QMIX (off-policy, TD) yaninda
+# artik MAPPO/HAPPO (on-policy, PPO) var. Mimari fark, VDN/QMIX'ten:
+#   - Aktorler (agents/mappo_happo.py Actor'leri) build_qnet() ile AYNI CNN
+#     govdesini kullanir — cikisi Q-degeri DEGIL, politika logit'i.
+#   - TEK MERKEZI KRITIK (CentralCritic), env.state()'i (QMIX'in mixer'inin
+#     kullandigi AYNI global gozlem) girdi alir — CTDE (centralized training,
+#     decentralized execution).
+#   - Off-policy replay YOK: ROLLOUT_EPISODES tam episode toplanir, GAE
+#     hesaplanir, PPO_EPOCHS kez minibatch SGD yapilir, batch ATILIR.
+# MAPPO/HAPPO farkı SADECE actor guncelleme sirasinda: HAPPO ajanlari
+# RASTGELE sirayla, ONCEKI ajanin politika-orani carpanini (importance
+# sampling factor) SIRADAKI ajanin advantage'ina carparak guncelliyor
+# (sequential/monotonic-improvement garantisi, Kuba ve ark. 2021 HAPPO
+# makalesi) — MAPPO'da bu carpan hep 1 (bagimsiz guncelleme).
+GAE_LAMBDA = 0.95
+PPO_ACTOR_LR = 1e-4
+PPO_CRITIC_LR = 1e-4
+PPO_CLIP_COEF = 0.2
+PPO_EPOCHS = 5
+PPO_MINIBATCH_SIZE = 256
+PPO_ROLLOUT_EPISODES = 32      # bu kadar TAM episode -> 1 PPO guncellemesi
+PPO_ENTROPY_COEF = 0.01
+PPO_VALUE_COEF = 0.5
+PPO_MAX_GRAD_NORM = 0.5
+
+MAPPO_EPISODES = 2_000
+MAPPO_EVAL_EVERY = 25
+HAPPO_EPISODES = 2_000
+HAPPO_EVAL_EVERY = 25
+
 # ---------------------------------------------------------------- gozlem
 # TRANSFER KISITI (Burak'in istegi: MARL-Pathfinding'in egitilmis modellerini
 # resume et). O projede OBS_DIM = 2*21*21 + 16 = 898, STATE_DIM = 2*21*21 + 8
 # = 890. CNNQNet'in parametre sayisi AdaptiveAvgPool2d sayesinde PATCH_SIZE'dan
 # bagimsiz, ama scalar_enc'in ilk Linear'i N_SCALARS'a, head'in ilki
-# (flat + SCALAR_EMBED + N_SCALARS)'a bagli. Yani ceckpoint'in BIREBIR
-# yuklenmesi icin OBS_CHANNELS=2 ve N_SCALARS=16 AYNEN korunmali. Korundu.
+# (flat + SCALAR_EMBED + N_SCALARS)'a bagli. N_SCALARS=16 iken bu ikisi de
+# BIREBIR transfer oluyordu. N_SCALARS=18'e cikinca (asagida, "son hareket"
+# ozelligi) bu iki katman ARTIK TRANSFER OLMUYOR — konvolusyon katmanlari
+# hala olur (bkz. asagidaki N_SCALARS notu).
 PATCH_RADIUS = 10              # 21x21 ornek
 PATCH_SIZE = 2 * PATCH_RADIUS + 1
 
@@ -409,26 +587,83 @@ PATCH_SIZE = 2 * PATCH_RADIUS + 1
 # Tensor SEKLI degismedigi icin checkpoint uyumu bozulmuyor.
 PATCH_STRIDE = 16
 
-OBS_CHANNELS = 2
-# kanal 0 = TEHLIKE HARITASI (0 guvenli, 0.5 dis halka, 1.0 ic halka)
-#           MARL-Pathfinding'deki "yasak bolge" kanaliyla AYNI ROL: "buradan
-#           kacin, buyuk deger daha kotu". Ikili degil dereceli olmasi transferi
-#           bozmuyor (ag zaten surekli girdi aliyor).
+# GLOBAL_PATCH_STRIDE (2026-08-25, dis inceleme onerisi): yerel kanal (stride
+# 16) sadece +-160 hucre goruyor, oracle ise TUM haritayi. Ayni PATCH_SIZE
+# (21x21) sekliyle ama COK DAHA GENIS aralikla ORNEKLENEN ikinci bir tehlike
+# kanali — "coklu-olcek" gorus: 50 hucre arayla 21 ornek = +-500 hucre, yani
+# 1000x1000 gridin YARISINI her yonde kapsiyor (harita ortasindaysa TAMAMINI).
+# Tensor SEKLI ayni kaldigi icin agents/networks.py'ye HICBIR degisiklik
+# GEREKMIYOR — sadece OBS_CHANNELS 2->3 oldu, CNNQNet zaten bu parametreden
+# genel. Sinir disi (harita disi) HUCRELER icin ayni "0.0=guvenli" kurali
+# (kanal 0 ile TUTARLI, mevcut haritanin kenarlarindaki davranisla ayni).
+GLOBAL_PATCH_STRIDE = 50
+PATCH_STRIDE = 16
+
+OBS_CHANNELS = 3
+# kanal 0 = YEREL TEHLIKE (stride 16, +-160 hucre) (0 guvenli, 0.5 dis halka,
+#           1.0 ic halka). MARL-Pathfinding'deki "yasak bolge" kanaliyla AYNI
+#           ROL: "buradan kacin, buyuk deger daha kotu". Ikili degil dereceli
+#           olmasi transferi bozmuyor (ag zaten surekli girdi aliyor).
 # kanal 1 = kendi izi (ziyaret edilmis hucreler) — MARL-Pathfinding ile BIREBIR
 #           ayni anlam.
+# kanal 2 = KURESEL TEHLIKE (stride 50, +-500 hucre) — YENI (2026-08-25).
+#           Ayni tehlike haritasi, cok daha genis/kaba ornekleme. Amac:
+#           ajanin "yerel olarak temiz ama ileride yogun bir radar kumesi
+#           var" durumunu ONCEDEN gormesi — oracle'in sahip oldugu kuresel
+#           bilginin sadelestirilmis bir yaklasimi. MARL-Pathfinding'de
+#           KARSILIGI YOK, transfer edilirken bu kanal HER ZAMAN sifirdan
+#           baslar (agirlik sekli zaten degisti, ayrica sorun degil).
 
-N_SCALARS = 16                 # slot slot MARL-Pathfinding ile hizalandi:
+# 16 -> 18 DENEY (2026-08-20, Burak): "cok kolay" (risksiz) haritalarda ajan
+# baslangicin hemen yaninda TIKANIP KALIYORDU — 8000 adimin tamamini
+# kullanip ilerlemeden (bkz. viz/plot_easy_fail.py, runs/fig_easy_fail.png).
+# Acik alanda fiziksel engel YOK, yani bu bir SALINIM/kararsizlik belirtisi.
+# PATCH_STRIDE ile "kendi izini daha net gor" denendi, BASARISIZ oldu (menzil
+# kaybi zarari asti). Bu sefer DAHA DOGRUDAN bir sinyal: ajanin SON ATTIGI
+# ADIM (16-17: son hareketin dr,dc'si, DIRS olceginde -1/0/1). Salinim
+# onleme (ayni yonu tersine cevirmeme) icin standart bir teknik.
+#
+# UYARI (checkpoint uyumu): N_SCALARS degistigi icin scalar_enc'in ilk
+# katmani VE head'in ilk katmani (skip-baglantisi n_scalars alir) MARL-
+# Pathfinding'in / eski ms3ks1_vdn8k_r25 checkpoint'inin agirliklariyla
+# SEKIL UYUŞMUYOR — o iki katman artik transfer OLMAYACAK (agents/transfer.py
+# bunu rapor eder, sessizce atlamaz). Konvolüsyon katmanlari (asil
+# gorsel/navigasyon bilgisi) etkilenmez, hala transfer olur.
+# EYLEM-OZGU ANLIK RISK (2026-08-27, dis inceleme onerisi — BC/PER/Dueling
+# hattinin UCU DE elendikten sonra): mevcut 12-15 slotlari "bu yone gitmek
+# HEDEFE mesafeyi ne kadar kisaltir" der (risk-mesafe haritasindan, yani
+# GELECEKTEKI beklenen risk dahil, TEK bir bilesik sayi) ama "bu yone
+# girersem BU ADIMDA ne kadar tespit/olum riski aliyorum" sorusunu AYRI
+# bir sinyal olarak vermez — ag bunu 3x21x21'lik seyrek/kuresel goruntuden
+# CIKARMAYA calisiyordu. Ölum oraninin 1.3/episode'da takilı kalmasinin
+# (rotasi %93 hedefe ULASIYOR ama ajan sik sik yanlis halkaya giriyor)
+# sebebinin bu "eksik yari" oldugu hipotez edildi. Cozum: 4 yon icin
+# self._hazard()'in (env/strike_env.py) AYNI olasilik modelini (per_entry,
+# alert carpani dahil) "su an bulundugum bolgeden bu komsuya gecersem"
+# sorusuyla tekrar kullanan 4 YENI skalar. Oracle'in SECTIGI aksiyon
+# DEGIL — sadece o eylemin ANLIK fiziksel risk bilgisi; aksiyonu YINE RL
+# ajani secer. `--dueling`/`--prioritized`/`--bc-lambda-start` YOK, saf
+# VDN + mask-fix mimarisi (bkz. strike-mission-vdn-egitim-bulgulari
+# hafizasi) KORUNUYOR.
+N_SCALARS = 22                  # slot slot MARL-Pathfinding ile hizalandi (0-15):
 # 0 agent_id | 1 other_terminal (orada: faz) | 2 t/max | 3 own_row | 4 own_col
 # 5 dy_goal  | 6 dx_goal | 7 dist_goal
 # 8 dy_other | 9 dx_other | 10 dist_other
 # 11 risk_dist_own (orada: bfs_own)
 # 12-15 risk_dist komsu FARKI: yukari/sag/asagi/sol (orada: bfs komsu farki)
-OBS_DIM = OBS_CHANNELS * PATCH_SIZE * PATCH_SIZE + N_SCALARS   # 898
+# 16-17 SON HAREKET (dr, dc) — MARL-Pathfinding'de YOK, YENI slot
+# 18-21 EYLEM-OZGU ANLIK RISK: yukari/sag/asagi/sol yone girmenin BU ADIMDAKI
+#       olum olasiligi (self._hazard() ile AYNI model) — MARL-Pathfinding'de
+#       YOK, YENI slot (2026-08-27)
+OBS_DIM = OBS_CHANNELS * PATCH_SIZE * PATCH_SIZE + N_SCALARS   # 1345 (3x21x21+22)
 
 STATE_CHANNELS = 2             # [A1 cevresi tehlike, A2 cevresi tehlike]
-STATE_SCALARS = 8              # A1_row,A1_col,A2_row,A2_col,goal_row,goal_col,
-                               # alive_bits, t/max
-STATE_DIM = STATE_CHANNELS * PATCH_SIZE * PATCH_SIZE + STATE_SCALARS   # 890
+# 16 skalar: A1_row,A1_col,A2_row,A2_col,goal_row,goal_col,alive_bits,t/max
+# (8) + A1'in 4 yon eylem-ozgu riski + A2'ninki (8) — 2026-08-28 dis inceleme:
+# merkezi kritik (QMIX mixer + MAPPO/HAPPO) ONCEDEN bu bilgiyi HIC gormuyordu,
+# aktorler observe() ile goruyordu ama kritik gormuyordu (bkz. env.state()).
+STATE_SCALARS = 16
+STATE_DIM = STATE_CHANNELS * PATCH_SIZE * PATCH_SIZE + STATE_SCALARS   # 898
 
 # ---------------------------------------------------------------- ag mimarisi
 CNN_CHANNELS = (16, 32)
@@ -465,7 +700,8 @@ def summary() -> str:
          f"curriculum {CURRICULUM_RADAR_START}->{CURRICULUM_RADAR_END} radar"
          if RADAR_RANDOM else "harita tohumu   : -"),
         f"odul hackleme   : timeout {R_TIMEOUT} < 2xolum {2*R_DEATH}; "
-        f"ikisi de olur {2*R_DEATH + R_ALL_DEAD} <= timeout {R_TIMEOUT}",
+        f"ikisi de olur {2*R_DEATH + R_ALL_DEAD} <= timeout+adim "
+        f"{R_TIMEOUT + MAX_STEPS * R_STEP} (MAX_STEPS={MAX_STEPS})",
         (f"risk modeli     : per_entry — GIRIS basina tek zar, "
          f"dis %{P_OUTER_TOTAL*100:.0f}  ic %{P_INNER_TOTAL*100:.0f} "
          f"(surede birikme YOK)"
@@ -477,8 +713,10 @@ def summary() -> str:
         f"~{SHAPING_COEF*(1/opt - (1-GAMMA)*0.5):.4f} (|R_STEP|={abs(R_STEP)})",
         f"odul            : adim {R_STEP}, olum {R_DEATH}, "
         f"ilk varis +{R_FIRST_GOAL}, ikinci +{R_SECOND_GOAL}",
-        f"gozlem          : {OBS_DIM} = 2x{PATCH_SIZE}x{PATCH_SIZE}(stride "
-        f"{PATCH_STRIDE}, +-{PATCH_RADIUS*PATCH_STRIDE} hucre) + {N_SCALARS} skalar",
+        f"gozlem          : {OBS_DIM} = {OBS_CHANNELS}x{PATCH_SIZE}x{PATCH_SIZE}"
+        f"(yerel stride {PATCH_STRIDE} +-{PATCH_RADIUS*PATCH_STRIDE} hucre, "
+        f"kuresel stride {GLOBAL_PATCH_STRIDE} +-{PATCH_RADIUS*GLOBAL_PATCH_STRIDE} "
+        f"hucre) + {N_SCALARS} skalar",
         f"alarm kuplaji   : {'ACIK' if ALERT_ENABLED else 'kapali'}",
     ])
 

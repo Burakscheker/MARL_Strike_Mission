@@ -1,32 +1,45 @@
 """Egitim dongusu — python train.py --algo vdn --episodes 500
 
-Algoritmalar: iql | vdn | qmix
+Algoritmalar: mappo | happo | vdn | qmix
 
-DQN (Asama 3, tek ajan sanity check) AYRI bir modul olarak yazilmadi, cunku
-ALARM KUPLAJI KAPALIYKEN (varsayilan) iki ucak gercekten bagimsiz: ortak odul
-yok, carpisma yok, olum zarlari bagimsiz. Yani `--algo iql` zaten iki paralel
-tek-ajan DQN kosusudur ve Asama 3'un kabul kriterini (tek ucak hedefe
-guvenle varabiliyor mu) dogrudan olcer.
+VDN/QMIX off-policy (TD-hedefli, replay buffer'li); MAPPO/HAPPO on-policy
+(PPO, tam episode'lar toplanip GAE ile guncellenir) — bkz. agents/mappo_happo.py
+modul dosya stringi. IQL (Asama 4, iki bagimsiz DQN) 2026-08-28'de KALDIRILDI
+(euzxx/MARL-pathtfinding'in mappo_happo dalindan MAPPO/HAPPO portlanirken) —
+agents/dqn.py artik yok, gerekirse git gecmisinden geri getirilebilir.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import os
+
+# CUDA DETERMINIZMI (2026-08-27, dis inceleme onerisi): CUBLAS_WORKSPACE_CONFIG
+# torch import EDILMEDEN/CUDA baglami kurulmadan ONCE ayarlanmali, aksi halde
+# etkisiz kalir (bkz. asagidaki main()'deki torch.use_deterministic_algorithms
+# cagrisi — ayni ayarin diger yarisi). Sebep: bu oturumda AYNI --seed ile
+# GPU'da IKI KEZ tekrarlanan bir egitim (action-risk deneyi, 2026-08-27)
+# TAMAMEN FARKLI sonuc (ep200 takim %50 vs %22) uretti — cuBLAS/cuDNN'in
+# non-deterministik algoritma secimi/atomik toplama sirasi tek-seed
+# kiyaslamalari GUVENILMEZ yapiyordu.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import sys
 import time
 from collections import deque
 
 import numpy as np
+import torch
 
 import config as C
 from agents import transfer
-from agents.dqn import DQNAgent
+from agents.mappo_happo import HAPPOTrainer, MAPPOTrainer
 from agents.qmix import QMixAgent
 from agents.vdn import VDNAgent
 from env.sampler import curriculum_n_radar, eval_map_seeds
 from env.strike_env import StrikeMissionEnv
-from env.two_agent import play_episode, play_episode_qmix, play_episode_vdn
+from env.two_agent import play_episode_ppo, play_episode_qmix, play_episode_vdn
+from env.vec_env import VecStrikeEnv
 
 # Windows'ta stdout bir dosyaya/boruya yonlendirilince cp1252 kullaniliyor ve
 # Turkce karakterlerde UnicodeEncodeError veriyor (MARL-Pathfinding'de yasandi).
@@ -38,46 +51,276 @@ try:
 except Exception:
     pass
 
-RUNNER = {"iql": play_episode, "vdn": play_episode_vdn, "qmix": play_episode_qmix}
+RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
+         "vdn": play_episode_vdn, "qmix": play_episode_qmix}
 
 
-def build_agent(algo: str, seed: int, device: str):
-    if algo == "iql":
-        return {C.AGENT_1: DQNAgent(seed=seed, device=device,
-                                    buffer_size=C.IQL_BUFFER, batch_size=C.IQL_BATCH,
-                                    lr=C.IQL_LR, eps_decay_steps=C.IQL_EPS_DECAY_STEPS,
-                                    learn_start=C.IQL_LEARN_START,
-                                    target_update=C.IQL_TARGET_UPDATE),
-                C.AGENT_2: DQNAgent(seed=seed + 1, device=device,
-                                    buffer_size=C.IQL_BUFFER, batch_size=C.IQL_BATCH,
-                                    lr=C.IQL_LR, eps_decay_steps=C.IQL_EPS_DECAY_STEPS,
-                                    learn_start=C.IQL_LEARN_START,
-                                    target_update=C.IQL_TARGET_UPDATE)}
+def build_agent(algo: str, seed: int, device: str, lr: float = None,
+                eps_end: float = None, dueling: bool = False,
+                prioritized: bool = False):
     if algo == "vdn":
-        return VDNAgent(seed=seed, device=device)
+        return VDNAgent(seed=seed, device=device,
+                         lr=lr if lr is not None else C.VDN_LR,
+                         eps_end=eps_end if eps_end is not None else C.EPS_END,
+                         dueling=dueling, prioritized=prioritized)
     if algo == "qmix":
-        return QMixAgent(seed=seed, device=device)
+        return QMixAgent(seed=seed, device=device,
+                          lr=lr if lr is not None else C.QMIX_LR)
+    if algo == "mappo":
+        return MAPPOTrainer(seed=seed, device=device)
+    if algo == "happo":
+        return HAPPOTrainer(seed=seed, device=device)
     raise ValueError(algo)
 
 
+# MAPPO/HAPPO epsilon-greedy KULLANMAZ (politika zaten stokastik; act()'in
+# deterministic=True/False'u train=True/False'tan geliyor, bkz.
+# play_episode_ppo) — set_eps/current_eps bu ikisi icin NO-OP.
 def set_eps(agent, algo: str, frac: float):
-    if algo == "iql":
-        for a in agent.values():
-            a.set_eps_progress(frac)
-    else:
-        agent.set_eps_progress(frac)
+    if algo in ("mappo", "happo"):
+        return
+    agent.set_eps_progress(frac)
 
 
 def current_eps(agent, algo: str) -> float:
-    return agent[C.AGENT_1].eps if algo == "iql" else agent.eps
+    return 0.0 if algo in ("mappo", "happo") else agent.eps
 
 
 def save(agent, algo: str, path_stem: str):
-    if algo == "iql":
-        agent[C.AGENT_1].save(f"{path_stem}_agent1.pt")
-        agent[C.AGENT_2].save(f"{path_stem}_agent2.pt")
-    else:
-        agent.save(f"{path_stem}.pt")
+    agent.save(f"{path_stem}.pt")
+
+
+# --------------------------------------------------------------- paralel VDN rollout
+#
+# GEREKCE (2026-08-21, olculdu): tek-env kosuda act() HER ADIMDA 2 kez,
+# batch=1 ile cagriliyor — GPU'da bu 8000 adimlik bir episode'da 16000 ayri
+# tekil dispatch demek, ve GPU'yu CPU'dan %64 YAVAS yapiyordu (34.85 vs
+# 57.32 s/ep, ayni makine, ayni ag). learn() zaten batch=32 kullaniyordu,
+# darbogaz act()'ti. Bu fonksiyon N StrikeMissionEnv'i PARALEL kosturup
+# act()'i TEK batch=N cagrisina indiriyor — GPU'nun batch=32-64 gibi bir
+# is yukunde gercekten kazanmasi icin (henuz olculmedi, bkz. --n-envs).
+#
+# TASARIM: main()'in ana dongusune (CSV loglama, eval/checkpoint secimi)
+# HICBIR degisiklik gerektirmiyor — generator, tek-env runner()'in dondurdugu
+# AYNI (info, losses) seklini, HER TAMAMLANAN episode icin sirayla yield
+# ediyor. main() sadece "runner(env, agent, ...)" cagrisini "next(roll)" ile
+# degistiriyor, gerisi ayni kalıyor.
+def vdn_parallel_rollout(agent, n_envs: int, max_steps: int, seed_base: int,
+                         episodes: int, n_radar_override: int | None,
+                         risk_shaping: bool, alert_enabled: bool):
+    completed = 0
+    n_radar = (n_radar_override if n_radar_override is not None
+              else curriculum_n_radar(1, episodes))
+    venv = VecStrikeEnv(n_envs, max_steps, seed_base, n_radar=n_radar,
+                        risk_shaping=risk_shaping, alert_enabled=alert_enabled)
+    pending_losses: list = []
+
+    while True:
+        m1, m2 = venv.action_masks()
+        a1 = agent.act_batch(C.AGENT_1, venv.obs[C.AGENT_1], m1)
+        a2 = agent.act_batch(C.AGENT_2, venv.obs[C.AGENT_2], m2)
+        obs_before = venv.obs
+        # SU ANKI (step'ten ONCE) pozisyon icin uzman aksiyonu — obs_before'la
+        # AYNI ana denk gelmeli (bkz. VecStrikeEnv.oracle_actions). Maliyeti
+        # onbelleklendigi icin ihmal edilebilir (bkz. env/vec_env.py); OGRETMEN-
+        # CAPASI (bc_lambda) kapaliyken bile hesaplaniyor ama learn()'de
+        # bc_lambda=0.0 oldugunda hicbir etkisi yok.
+        oa1, oa2 = venv.oracle_actions()
+        next_obs, r_team, done, infos, nm1, nm2 = venv.step(a1, a2, n_radar=n_radar)
+
+        for i in range(n_envs):
+            is_trunc = bool(done[i]) and infos[i].get("timeout", False)
+            push_done = bool(done[i]) and not is_trunc
+            agent.push(obs_before[C.AGENT_1][i], int(a1[i]),
+                      obs_before[C.AGENT_2][i], int(a2[i]),
+                      float(r_team[i]), next_obs[C.AGENT_1][i], next_obs[C.AGENT_2][i],
+                      push_done, nm1[i], nm2[i], int(oa1[i]), int(oa2[i]))
+            loss = agent.learn()
+            if loss is not None:
+                pending_losses.append(loss)
+            if done[i]:
+                completed += 1
+                losses, pending_losses = pending_losses, []
+                if n_radar_override is None:
+                    n_radar = curriculum_n_radar(completed + 1, episodes)
+                    venv.set_n_radar(n_radar)
+                yield infos[i], losses
+
+
+# QMIX icin AYNI paralel rollout — tek fark: state/next_state de push edilir
+# (mixer'in hypernetwork'u bunu ister, bkz. agents/qmix.py).
+def qmix_parallel_rollout(agent, n_envs: int, max_steps: int, seed_base: int,
+                          episodes: int, n_radar_override: int | None,
+                          risk_shaping: bool, alert_enabled: bool):
+    completed = 0
+    n_radar = (n_radar_override if n_radar_override is not None
+              else curriculum_n_radar(1, episodes))
+    venv = VecStrikeEnv(n_envs, max_steps, seed_base, n_radar=n_radar,
+                        risk_shaping=risk_shaping, alert_enabled=alert_enabled)
+    pending_losses: list = []
+
+    while True:
+        m1, m2 = venv.action_masks()
+        state = venv.states()
+        a1 = agent.act_batch(C.AGENT_1, venv.obs[C.AGENT_1], m1)
+        a2 = agent.act_batch(C.AGENT_2, venv.obs[C.AGENT_2], m2)
+        obs_before = venv.obs
+        # need_state=True: next_state reset-ONCESI GERCEK state olarak doner
+        # (VDN'deki true_obs/nm duzeltmesiyle AYNI gerekce — timeout'ta
+        # push_done=False oldugu icin bu state GERCEKTEN bootstrap'e girer).
+        next_obs, r_team, done, infos, nm1, nm2, next_state = venv.step(
+            a1, a2, n_radar=n_radar, need_state=True)
+
+        for i in range(n_envs):
+            is_trunc = bool(done[i]) and infos[i].get("timeout", False)
+            push_done = bool(done[i]) and not is_trunc
+            agent.push(obs_before[C.AGENT_1][i], int(a1[i]),
+                      obs_before[C.AGENT_2][i], int(a2[i]),
+                      float(r_team[i]), next_obs[C.AGENT_1][i], next_obs[C.AGENT_2][i],
+                      push_done, nm1[i], nm2[i], state[i], next_state[i])
+            loss = agent.learn()
+            if loss is not None:
+                pending_losses.append(loss)
+            if done[i]:
+                completed += 1
+                losses, pending_losses = pending_losses, []
+                if n_radar_override is None:
+                    n_radar = curriculum_n_radar(completed + 1, episodes)
+                    venv.set_n_radar(n_radar)
+                yield infos[i], losses
+
+
+# MAPPO/HAPPO icin paralel rollout (2026-08-28) — VDN/QMIX'in auto-reset
+# deseninden BILEREK FARKLI: PPO'nun GAE'si episode SINIRLARINI net bilmek
+# ZORUNDA (bootstrap timeout'ta mi, olum/varista mi?), auto-reset'in "bu
+# adim ayni haritanin mi yoksa YENI bir haritanin mi ilk adimi" belirsizligi
+# GAE hesabini BOZAR. Bunun yerine eval/vdn_vec_evaluate'teki GUVENLI
+# "chunk" desenini kullanir: n_envs harita AYNI ANDA baslar, HER BIRI TAM
+# olarak biter (auto-reset YOK, biten NOOP'a duser), sonra hepsi icin GAE
+# hesaplanip TEK RolloutBatch'e donusur. n_envs=PPO_ROLLOUT_EPISODES ise
+# (varsayilan) bu TAM OLARAK bir PPO guncellemesine denk gelir.
+def ppo_parallel_rollout(agent, n_envs: int, max_steps: int, seed_base: int,
+                         episodes: int, n_radar_override: int | None,
+                         risk_shaping: bool, alert_enabled: bool):
+    completed = 0
+    n_radar = (n_radar_override if n_radar_override is not None
+              else curriculum_n_radar(1, episodes))
+
+    while completed < episodes:
+        count = min(n_envs, episodes - completed)
+        envs = [StrikeMissionEnv(seed=seed_base + completed + i, radar_random=True,
+                                 n_radar=n_radar, max_steps=max_steps,
+                                 risk_shaping=risk_shaping, alert_enabled=alert_enabled)
+               for i in range(count)]
+        obs0 = [e.reset(n_radar=n_radar) for e in envs]
+        obs1 = np.stack([o[C.AGENT_1] for o in obs0])
+        obs2 = np.stack([o[C.AGENT_2] for o in obs0])
+        done = [False] * count
+        infos: list = [None] * count
+        eps_data = [{name: [] for name in ("obs", "states", "masks", "actions",
+                                           "old_logp", "rewards", "values", "alive")}
+                   for _ in range(count)]
+
+        while not all(done):
+            states = np.stack([e.state() for e in envs])
+            m1 = np.stack([e.action_mask(C.AGENT_1) for e in envs])
+            m2 = np.stack([e.action_mask(C.AGENT_2) for e in envs])
+            masks = np.stack([m1, m2], axis=1)
+            obs_arr = np.stack([obs1, obs2], axis=1)
+            actions, old_logp, values = agent.act_batch(obs_arr, masks, states)
+            no1, no2 = list(obs1), list(obs2)
+            for i, e in enumerate(envs):
+                if done[i]:
+                    continue
+                alive = np.array([e.alive[C.AGENT_1], e.alive[C.AGENT_2]])
+                acts = {C.AGENT_1: int(actions[i, 0]), C.AGENT_2: int(actions[i, 1])}
+                o, r_team, d, info = e.step(acts)
+                no1[i] = o[C.AGENT_1]; no2[i] = o[C.AGENT_2]
+                ed = eps_data[i]
+                ed["obs"].append(obs_arr[i]); ed["states"].append(states[i])
+                ed["masks"].append(masks[i]); ed["actions"].append(actions[i])
+                ed["old_logp"].append(old_logp[i]); ed["rewards"].append(float(r_team))
+                ed["values"].append(float(values[i])); ed["alive"].append(alive)
+                if d:
+                    done[i] = True
+                    infos[i] = info
+            obs1 = np.stack(no1); obs2 = np.stack(no2)
+
+        for i, e in enumerate(envs):
+            is_timeout = bool(infos[i].get("timeout", False))
+            bootstrap_value = 0.0
+            if is_timeout:
+                with torch.no_grad():
+                    final_state = torch.as_tensor(e.state(), dtype=torch.float32,
+                                                 device=agent.device).unsqueeze(0)
+                    bootstrap_value = float(agent.critic(final_state).item())
+            batch = agent.add_episode(eps_data[i], terminated_true=not is_timeout,
+                                      bootstrap_value=bootstrap_value)
+            completed += 1
+            losses: list = []
+            if batch is not None:
+                ul = agent.update(batch)
+                losses = [ul["actor_loss"], ul["critic_loss"]]
+            if n_radar_override is None:
+                n_radar = curriculum_n_radar(completed + 1, episodes)
+            yield infos[i], losses
+
+
+def ppo_vec_evaluate(env, agent, episodes: int, seed: int, n_envs: int) -> dict:
+    """vdn_vec_evaluate'in MAPPO/HAPPO esdegeri — AYNI chunked/auto-reset-YOK
+    deseni, sadece agent.act_batch()'in PPO imzasini (obs,masks,states) kullanir
+    (VDN/QMIX'in act_batch(agent_id,obs,mask,eps) imzasindan FARKLI, o yuzden
+    vdn_vec_evaluate DOGRUDAN kullanilamiyor)."""
+    seeds = eval_map_seeds(episodes) if env.radar_random else [None] * episodes
+
+    def run_chunk(chunk_seeds, death_enabled):
+        n = len(chunk_seeds)
+        envs = [StrikeMissionEnv(seed=seed + i, radar_random=env.radar_random,
+                                 n_radar=C.N_RADAR, max_steps=env.max_steps,
+                                 risk_shaping=env.risk_shaping,
+                                 hazard_mode=env.hazard_mode,
+                                 alert_enabled=env.alert_enabled,
+                                 death_enabled=death_enabled)
+                for i in range(n)]
+        obs = [e.reset(map_seed=s, n_radar=C.N_RADAR) for e, s in zip(envs, chunk_seeds)]
+        obs1 = np.stack([o[C.AGENT_1] for o in obs])
+        obs2 = np.stack([o[C.AGENT_2] for o in obs])
+        done = [False] * n
+        infos: list = [None] * n
+        while not all(done):
+            states = np.stack([e.state() for e in envs])
+            m1 = np.stack([e.action_mask(C.AGENT_1) for e in envs])
+            m2 = np.stack([e.action_mask(C.AGENT_2) for e in envs])
+            masks = np.stack([m1, m2], axis=1)
+            obs_arr = np.stack([obs1, obs2], axis=1)
+            actions, _, _ = agent.act_batch(obs_arr, masks, states, deterministic=True)
+            no1, no2 = list(obs1), list(obs2)
+            for i, e in enumerate(envs):
+                if done[i]:
+                    continue
+                o, _r, d, info = e.step({C.AGENT_1: int(actions[i, 0]),
+                                         C.AGENT_2: int(actions[i, 1])})
+                no1[i] = o[C.AGENT_1]; no2[i] = o[C.AGENT_2]
+                if d:
+                    done[i] = True
+                    infos[i] = info
+            obs1 = np.stack(no1); obs2 = np.stack(no2)
+        return infos
+
+    acc = {k: 0.0 for k in METRIC_KEYS}
+    for start in range(0, episodes, n_envs):
+        chunk = seeds[start:start + n_envs]
+        dice_infos = run_chunk(chunk, death_enabled=True)
+        route_infos = run_chunk(chunk, death_enabled=False)
+        for dinfo, rinfo in zip(dice_infos, route_infos):
+            m1 = rinfo["surv1"] if rinfo["reached1"] else 0.0
+            m2 = rinfo["surv2"] if rinfo["reached2"] else 0.0
+            info = dict(dinfo)
+            info["route_reached"] = float(rinfo["reached1"] or rinfo["reached2"])
+            info["mission_prob"] = 1.0 - (1.0 - m1) * (1.0 - m2)
+            for k in METRIC_KEYS:
+                acc[k] += float(info[k])
+    return {k: v / episodes for k, v in acc.items()}
 
 
 # --------------------------------------------------------------- degerlendirme
@@ -113,6 +356,11 @@ def evaluate(env, agent, algo: str, episodes: int, seed: int = 12345) -> dict:
     Curriculum burada UYGULANMAZ: degerlendirme her zaman tam N_RADAR'da.
     """
     runner = RUNNER[algo]
+    # BUG (bulundu ve duzeltildi): eval() bu ortamin (egitimde de kullanilan
+    # AYNI env nesnesi) rng'sini sabit tohuma cekiyordu ama HIC geri
+    # yuklemiyordu. Sonuc: eval_every ne kadar sikysa egitimin geri kalani
+    # o kadar farkli bir zar akisina kayiyordu. Simdi eval'dan once/sonra saklaniyor.
+    saved_rng = env.rng
     env.rng = np.random.default_rng(seed)      # olum zarlari icin sabit tohum
     renv = _route_twin(env)
     renv.rng = np.random.default_rng(seed)
@@ -130,6 +378,7 @@ def evaluate(env, agent, algo: str, episodes: int, seed: int = 12345) -> dict:
         info["mission_prob"] = 1.0 - (1.0 - m1) * (1.0 - m2)
         for k in METRIC_KEYS:
             acc[k] += float(info[k])
+    env.rng = saved_rng
     return {k: v / episodes for k, v in acc.items()}
 
 
@@ -153,6 +402,73 @@ def _route_twin(env):
     return tw
 
 
+def vdn_vec_evaluate(env, agent, episodes: int, seed: int, n_envs: int) -> dict:
+    """evaluate()'in VDN icin PARALEL/batch'li hali — AYNI METRIC_KEYS'i,
+    AYNI iki-kosu tasarimini (zar acik + zar kapali "niyet edilen rota"
+    ikizi) dondurur, sadece act()'i batch=1 yerine batch=min(n_envs,kalan)
+    ile cagirir.
+
+    GEREKCE (olculdu, 2026-08-21): evaluate() TRAINING rollout'u gibi
+    act()'i her adimda batch=1 ile cagiriyordu — GPU'da bu, vdn_parallel_
+    rollout'u anlamli yapan AYNI sorunun (tekil dispatch) eval sirasinda da
+    yasanmasi demekti. 50 eval-episode x 2 (zar+rota) = 100 seri tam
+    episode ~16 dk tutuyordu (32 paralel egitimle KIYASLANAMAYACAK kadar
+    yavas kalmisti). Bu fonksiyon HER adimda TUM chunk'i (<=n_envs harita)
+    tek batch'te isler.
+
+    Auto-reset YOK (vdn_parallel_rollout'tan farki): her ortam TAM OLARAK
+    kendi map_seed'inde BIR KEZ kosar, biter, biten NOOP'a duser (mask
+    zaten NOOP'a kilitler) digerleri bitene kadar devam eder.
+    """
+    seeds = eval_map_seeds(episodes) if env.radar_random else [None] * episodes
+
+    def run_chunk(chunk_seeds, death_enabled):
+        n = len(chunk_seeds)
+        envs = [StrikeMissionEnv(seed=seed + i, radar_random=env.radar_random,
+                                 n_radar=C.N_RADAR, max_steps=env.max_steps,
+                                 risk_shaping=env.risk_shaping,
+                                 hazard_mode=env.hazard_mode,
+                                 alert_enabled=env.alert_enabled,
+                                 death_enabled=death_enabled)
+                for i in range(n)]
+        obs = [e.reset(map_seed=s, n_radar=C.N_RADAR) for e, s in zip(envs, chunk_seeds)]
+        obs1 = np.stack([o[C.AGENT_1] for o in obs])
+        obs2 = np.stack([o[C.AGENT_2] for o in obs])
+        done = [False] * n
+        infos: list = [None] * n
+        while not all(done):
+            m1 = np.stack([e.action_mask(C.AGENT_1) for e in envs])
+            m2 = np.stack([e.action_mask(C.AGENT_2) for e in envs])
+            a1 = agent.act_batch(C.AGENT_1, obs1, m1, eps=0.0)
+            a2 = agent.act_batch(C.AGENT_2, obs2, m2, eps=0.0)
+            no1, no2 = list(obs1), list(obs2)
+            for i, e in enumerate(envs):
+                if done[i]:
+                    continue
+                o, _r, d, info = e.step({C.AGENT_1: int(a1[i]), C.AGENT_2: int(a2[i])})
+                no1[i] = o[C.AGENT_1]; no2[i] = o[C.AGENT_2]
+                if d:
+                    done[i] = True
+                    infos[i] = info
+            obs1 = np.stack(no1); obs2 = np.stack(no2)
+        return infos
+
+    acc = {k: 0.0 for k in METRIC_KEYS}
+    for start in range(0, episodes, n_envs):
+        chunk = seeds[start:start + n_envs]
+        dice_infos = run_chunk(chunk, death_enabled=True)
+        route_infos = run_chunk(chunk, death_enabled=False)
+        for dinfo, rinfo in zip(dice_infos, route_infos):
+            m1 = rinfo["surv1"] if rinfo["reached1"] else 0.0
+            m2 = rinfo["surv2"] if rinfo["reached2"] else 0.0
+            info = dict(dinfo)
+            info["route_reached"] = float(rinfo["reached1"] or rinfo["reached2"])
+            info["mission_prob"] = 1.0 - (1.0 - m1) * (1.0 - m2)
+            for k in METRIC_KEYS:
+                acc[k] += float(info[k])
+    return {k: v / episodes for k, v in acc.items()}
+
+
 def fmt_eval(m: dict) -> str:
     # SIRA ONEMLI: sismeyen metrikler (varis/gorev) ONCE, sisen analitik
     # SONRA ve parantez icinde — okuyan kisi once dogru sinyali gorsun.
@@ -169,7 +485,7 @@ def fmt_eval(m: dict) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--algo", choices=["iql", "vdn", "qmix"], required=True)
+    ap.add_argument("--algo", choices=["mappo", "happo", "vdn", "qmix"], required=True)
     ap.add_argument("--episodes", type=int, default=None)
     ap.add_argument("--seed", type=int, default=C.SEED)
     ap.add_argument("--tag", default=None)
@@ -194,15 +510,75 @@ def main():
                     help="epsilon'un BASLANGIC degeri (varsayilan C.EPS_START=1.0). "
                          "DEVAM eden bir kosuda sart: egitilmis bir checkpoint'ten "
                          "1.0 ile baslamak, ogrenilmis politikayi yuzlerce episode "
-                         "boyunca rastgele aksiyonlarla bozar. 0.2-0.4 tipik.")
+                         "boyunca rastgele aksiyonlarla bozar. 0.2-0.4 tipik. "
+                         "UYARI: bu deger C.EPS_END'in (varsayilan 0.05) ALTINDAYSA "
+                         "epsilon ANINDA tabana (EPS_END) sikisir, --eps-start DEGIL "
+                         "efektif olarak EPS_END kullanilir — daha dusuk bir keşif "
+                         "istiyorsan --eps-end'i de dusur.")
+    ap.add_argument("--eps-end", type=float, default=None,
+                    help="epsilon'un TABAN degerini gecici override et (varsayilan "
+                         "C.EPS_END=0.05). BC-checkpoint'ten fine-tune ederken "
+                         "0.05, 8000 adimlik bir bolumde hala ~400 rastgele aksiyon "
+                         "demek — BC'nin ogrettigi rotayi gereksiz yere bozar. "
+                         "0.01 tipik.")
     ap.add_argument("--n-radar", type=int, default=None,
                     help="radar sayisini SABITLE (curriculum'u kapatir). "
                          "Verilmezse 10->40 rampasi kullanilir.")
+    ap.add_argument("--lr", type=float, default=None,
+                    help="optimizer LR'ini gecici override et (varsayilan config'teki "
+                         "*_LR). BC-checkpoint'ten RL fine-tune ederken onemli: BC, "
+                         "cross-entropy ile egitildigi icin cikis katmaninin olcegi "
+                         "gercek Q-degerleriyle (ort. 17-37) uyumsuz — normal LR ile "
+                         "ilk birkac gradyan adimi bu olcegi agresifçe yeniden "
+                         "kalibre ederken BC'nin ogrendigi ince aksiyon-siralamasini "
+                         "bozar. Fine-tune'da 5-10x dusuk LR kullan.")
+    ap.add_argument("--bc-lambda-start", type=float, default=None,
+                    help="OGRETMEN-CAPASI (teacher-anchored VDN, sadece vdn) "
+                         "baslangic agirligi (varsayilan C.VDN_BC_LAMBDA_START). "
+                         "TD kaybina oracle-capraz-entropi ekler: L=L_TD+lambda*L_BC. "
+                         "0.0 = kapali (eski davranis). BC-checkpoint'ten fine-tune "
+                         "ederken TD guncellemesinin BC'nin ogrettigi rotayi "
+                         "silmesini onlemek icin kullan.")
+    ap.add_argument("--bc-lambda-end", type=float, default=None,
+                    help="OGRETMEN-CAPASI TABAN agirligi (varsayilan "
+                         "C.VDN_BC_LAMBDA_END). Egitim ilerledikce lambda buraya "
+                         "iner ama SIFIRA INMEZ (0 vermek tam kapatir).")
+    ap.add_argument("--dueling", action="store_true",
+                    help="SADECE vdn: Dueling mimari (V(s)+A(s,a), Wang ve ark. "
+                         "2016) — Q'nun MUTLAK OLCEGIYLE aksiyonlar ARASI "
+                         "SIRALAMAYI mimari olarak ayirir. Varsayilan KAPALI "
+                         "(eski mimariyle checkpoint uyumu icin); acilirsa "
+                         "ESKI checkpoint'ler YUKLENEMEZ (farkli parametre "
+                         "isimleri), sifirdan egitim gerekir.")
+    ap.add_argument("--prioritized", action="store_true",
+                    help="SADECE vdn: Oncelikli Deneyim Tekrari (PER, Schaul "
+                         "ve ark. 2016) — buffer'da NADIR ama KRITIK gecisleri "
+                         "(olum, varis, riskli giris) TD-hatasi buyuklugune "
+                         "gore daha sik ornekler. Varsayilan KAPALI (uniform "
+                         "ornekleme, eski davranis).")
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
     ap.add_argument("--no-mixer-transfer", action="store_true")
+    ap.add_argument("--n-envs", type=int, default=1,
+                    help="vdn/qmix/mappo/happo: bu kadar ortami PARALEL "
+                         "kosturup act()'i batch=N ile cagirir (GPU'da anlamli "
+                         "olmasi icin). VDN/QMIX auto-reset kullanir; MAPPO/"
+                         "HAPPO auto-reset-YOK chunk deseni kullanir (bkz. "
+                         "ppo_parallel_rollout) — mappo/happo'da N=PPO_ROLLOUT_"
+                         "EPISODES onerilir (tam 1 PPO guncellemesi = 1 tur). "
+                         "1 = eski tek-env davranisi, HICBIR SEY degismez.")
     args = ap.parse_args()
+
+    # CUDA DETERMINIZMI (2026-08-27) — devam: CUBLAS_WORKSPACE_CONFIG modul
+    # basinda ayarlandi (bkz. dosya basi), burada torch'un ALGORITMA SECIMINI
+    # de sabitliyoruz. warn_only=True: deterministik karsiligi olmayan NADIR
+    # bir op cikarsa egitim CRASH OLMASIN, sadece uyarsin — hicbir katman
+    # bunu tetiklemiyor gibi gorunuyor (CNN/Linear/Adam hepsi deterministik
+    # karsiligina sahip) ama garanti degil, warn_only guvenli taraf.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
     algo = args.algo
     episodes = args.episodes or getattr(C, f"{algo.upper()}_EPISODES")
@@ -218,7 +594,9 @@ def main():
     env = StrikeMissionEnv(max_steps=args.max_steps, seed=args.seed,
                            alert_enabled=args.alert,
                            risk_shaping=not args.no_risk_shaping)
-    agent = build_agent(algo, args.seed, args.device)
+    agent = build_agent(algo, args.seed, args.device, lr=args.lr,
+                        eps_end=args.eps_end, dueling=args.dueling,
+                        prioritized=args.prioritized)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -250,24 +628,35 @@ def main():
     #   q_gap  = en iyi ile ikinci arasindaki fark (ayirt etme gucu)
     # SABIT bir gozlem kumesinde olculur — yoksa "kotu politika kotu durumlara
     # gider, oradaki Q farklidir" diye bir karistirici girer.
-    _probe = []
-    _penv = StrikeMissionEnv(max_steps=args.max_steps, seed=999,
-                             radar_random=env.radar_random, n_radar=C.N_RADAR)
-    _o = _penv.reset(map_seed=C.EVAL_SEED_BASE - 1, n_radar=C.N_RADAR)
-    for _ in range(64):
-        _probe.append(_o[C.AGENT_1])
-        _o, _, _d, _ = _penv.step({C.AGENT_1: C.RIGHT, C.AGENT_2: C.DOWN})
-        if _d:
-            break
-    import torch as _torch
-    PROBE = _torch.as_tensor(np.asarray(_probe, dtype=np.float32))
+    # MAPPO/HAPPO'nun aktoru Q-degeri DEGIL politika LOGIT'i uretir — bu olcek
+    # probu VDN/QMIX'e ozgu (bkz. yukaridaki gerekce), onlar icin NO-OP.
+    if algo in ("mappo", "happo"):
+        def q_stats():
+            return 0.0, 0.0
+    else:
+        _probe = []
+        _penv = StrikeMissionEnv(max_steps=args.max_steps, seed=999,
+                                 radar_random=env.radar_random, n_radar=C.N_RADAR)
+        _o = _penv.reset(map_seed=C.EVAL_SEED_BASE - 1, n_radar=C.N_RADAR)
+        for _ in range(64):
+            _probe.append(_o[C.AGENT_1])
+            _o, _, _d, _ = _penv.step({C.AGENT_1: C.RIGHT, C.AGENT_2: C.DOWN})
+            if _d:
+                break
+        import torch as _torch
+        # BUG (bulundu ve duzeltildi, 2026-08-21): PROBE hep CPU'da kaliyordu —
+        # --device cuda ile agin AGIRLIKLARI GPU'ya tasindigi icin conv2d
+        # "input CPU, weight CUDA" hatasi verip cokuyordu. Once hep --device cpu
+        # kullanildigi icin bu hic ortaya cikmamisti.
+        PROBE = _torch.as_tensor(np.asarray(_probe, dtype=np.float32),
+                                 device=args.device)
 
-    def q_stats():
-        net = (agent[C.AGENT_1].online if algo == "iql" else agent.online[C.AGENT_1])
-        with _torch.no_grad():
-            q = net(PROBE)[:, :4]
-        t2 = q.topk(2, dim=1).values
-        return float(q.mean()), float((t2[:, 0] - t2[:, 1]).mean())
+        def q_stats():
+            net = agent.online[C.AGENT_1]
+            with _torch.no_grad():
+                q = net(PROBE)[:, :4]
+            t2 = q.topk(2, dim=1).values
+            return float(q.mean()), float((t2[:, 0] - t2[:, 1]).mean())
     # EPISODE BASINA ham kayit — grafikte hem ham nokta hem hareketli ortalama
     # cizilebilsin diye. Sadece hareketli ortalama loglamak, gurultunun ne kadar
     # oldugunu gizler; sadece hami loglamak da egilimi gostermez.
@@ -279,30 +668,77 @@ def main():
     win = C.TRAIN_HARM_WINDOW
     ma = {k: deque(maxlen=win) for k in ("team", "dead", "inner", "steps", "loss")}
     runner = RUNNER[algo]
+    if args.n_envs > 1:
+        print(f"paralel rollout: {args.n_envs} ortam (GPU batch icin)")
+        # BUG (bulundu ve duzeltildi, 2026-08-28): qmix_parallel_rollout
+        # onceden de VARDI ama buraya hic BAGLANMAMISTI — --n-envs>1 ile
+        # qmix her zaman sessizce tek-env'e duşuyordu (GPU'da hicbir
+        # kazanc olmadan, dispatch overhead'i tam tersine YAVASLATIYORDU
+        # — bkz. VDN'in AYNI bulgusu, agents/vdn.py modul dosya stringi).
+        # MAPPO/HAPPO (2026-08-28): ppo_parallel_rollout AYNI kazanci
+        # saglar ama auto-reset YOK (chunk deseni) — bkz. o fonksiyonun
+        # dosya stringi, GAE episode sinirlarini net bilmek zorunda.
+        fn = {"vdn": vdn_parallel_rollout, "qmix": qmix_parallel_rollout,
+             "mappo": ppo_parallel_rollout, "happo": ppo_parallel_rollout}[algo]
+        roll = fn(agent, args.n_envs, args.max_steps, args.seed, episodes,
+                  args.n_radar, not args.no_risk_shaping, args.alert)
+    else:
+        roll = None
     floor = max(1.0, episodes * C.EPS_FLOOR_FRAC)
+    eps_end_eff = args.eps_end if args.eps_end is not None else C.EPS_END
     # eps_progress 0..1 arasi bir ILERLEME; 0 -> EPS_START, 1 -> EPS_END.
     # --eps-start verilirse o degere karsilik gelen ilerlemeden BASLANIR:
     #     eps = EPS_START + frac*(EPS_END - EPS_START)  ->  frac0'i cozeriz.
     frac0 = 0.0
     if args.eps_start is not None:
-        span = C.EPS_START - C.EPS_END
+        span = C.EPS_START - eps_end_eff
         frac0 = min(1.0, max(0.0, (C.EPS_START - args.eps_start) / span))
         print(f"epsilon {args.eps_start:.2f}'den basliyor "
-              f"(ilerleme {frac0:.2f}), {C.EPS_END} tabanina "
+              f"(ilerleme {frac0:.2f}), {eps_end_eff} tabanina "
               f"ep {int(floor)} civarinda iner")
+
+    # OGRETMEN-CAPASI (teacher-anchored VDN): SADECE --bc-lambda-start acikca
+    # verilirse devreye girer — varsayilan davranis (bayrak yoksa) ESKISIYLE
+    # BIREBIR AYNI kalsin diye lambda'nin config'teki VDN_BC_LAMBDA_START'i
+    # SESSIZCE varsayilan almasina IZIN VERILMEZ (aksi halde tum gelecek
+    # vdn kosulari, mevcut %46 mask-fix referansiyla KIYASLANAMAZ hale gelirdi).
+    bc_lam_start = args.bc_lambda_start if args.bc_lambda_start is not None else 0.0
+    bc_lam_end = (args.bc_lambda_end if args.bc_lambda_end is not None
+                 else C.VDN_BC_LAMBDA_END if bc_lam_start > 0.0 else 0.0)
+    bc_floor = max(1.0, episodes * C.VDN_BC_LAMBDA_DECAY_FRAC)
+    if algo == "vdn" and bc_lam_start > 0.0:
+        print(f"ogretmen-capasi (BC-ankraj): lambda {bc_lam_start:.2f} -> "
+              f"{bc_lam_end:.2f}, ep {int(bc_floor)} civarinda tabana iner")
+    if algo == "vdn" and args.prioritized:
+        print(f"PER acik: alpha={C.PER_ALPHA}, beta {C.PER_BETA_START} -> "
+              f"{C.PER_BETA_END} (ep {int(floor)} civarinda 1.0'a varir)"
+              + (", dueling mimari" if args.dueling else ""))
+    elif algo == "vdn" and args.dueling:
+        print("dueling mimari acik (PER kapali)")
+
     t_start = time.perf_counter()
     best = -1.0   # mission_prob
 
     for ep in range(1, episodes + 1):
         set_eps(agent, algo, frac0 + (1.0 - frac0) * min(1.0, ep / floor))
+        if algo == "vdn" and bc_lam_start > 0.0:
+            agent.set_bc_lambda(bc_lam_start + (bc_lam_end - bc_lam_start)
+                                * min(1.0, ep / bc_floor))
+        if algo == "vdn" and args.prioritized:
+            # eps/bc_lambda ile AYNI ritim (floor): PER_BETA_START -> PER_BETA_END.
+            agent.set_per_beta(C.PER_BETA_START + (C.PER_BETA_END - C.PER_BETA_START)
+                               * min(1.0, ep / floor))
         # Curriculum: radar sayisi 10 -> 40 rampalanir (bkz. sampler). Harita
         # tohumu VERILMEZ -> env kendi rng'sinden ceker, yani her episode taze
         # harita. Ezberlenecek sabit havuz yok; asiri ogrenmeye karsi asil
         # savunma bu (degerlendirme tohumlariyla da kesismiyor).
-        rk = ({"n_radar": (args.n_radar if args.n_radar is not None
-                           else curriculum_n_radar(ep, episodes))}
-              if env.radar_random else None)
-        info, losses = runner(env, agent, train=True, reset_kwargs=rk)
+        if roll is not None:
+            info, losses = next(roll)
+        else:
+            rk = ({"n_radar": (args.n_radar if args.n_radar is not None
+                               else curriculum_n_radar(ep, episodes))}
+                  if env.radar_random else None)
+            info, losses = runner(env, agent, train=True, reset_kwargs=rk)
 
         ep_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
                        int(info["team_success"]),
@@ -314,9 +750,8 @@ def main():
         ma["dead"].append(float(info["n_dead"]))
         ma["inner"].append(float(info["inner_total"]))
         ma["steps"].append(float(info["steps"]))
-        ls = losses if isinstance(losses, list) else (losses[C.AGENT_1] + losses[C.AGENT_2])
-        if ls:
-            ma["loss"].append(float(np.mean(ls)))
+        if losses:
+            ma["loss"].append(float(np.mean(losses)))
 
         if ep % C.TRAIN_HARM_LOG_EVERY == 0:
             dense_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
@@ -336,7 +771,14 @@ def main():
                   f"{el:.0f}s ({el/ep:.2f}s/ep)")
 
         if ep % eval_every == 0 or ep == episodes:
-            m = evaluate(env, agent, algo, args.eval_episodes)
+            if roll is None:
+                m = evaluate(env, agent, algo, args.eval_episodes)
+            elif algo in ("mappo", "happo"):
+                # vdn_vec_evaluate KULLANILAMAZ: act_batch imzasi farkli
+                # (bkz. ppo_vec_evaluate dosya stringi).
+                m = ppo_vec_evaluate(env, agent, args.eval_episodes, 12345, args.n_envs)
+            else:
+                m = vdn_vec_evaluate(env, agent, args.eval_episodes, 12345, args.n_envs)
             log_w.writerow([ep, f"{current_eps(agent, algo):.4f}",
                             *[f"{m[k]:.4f}" for k in METRIC_KEYS]])
             log_f.flush()
