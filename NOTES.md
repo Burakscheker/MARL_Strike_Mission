@@ -556,12 +556,22 @@ negatif. **greedy %70 = bu checkpoint'in GERCEK tavani.** %75'e giden tek
 yol: DAHA IYI DEGER FONKSIYONU (o 27 stall haritada oracle'in bulabildigi
 guvenli rotayi bulan). Oracle tavani %81.5 -> %70 = oracle'in %86'si.
 
-### it16: QR-DQN (distributional RL) — son ciddi algoritmik bahis
-Motivasyon: deger fonksiyonu stokastik ceza (olum) altinda KARAMSAR mean'e
-cokuyor (it7-it15 pattern). Distributional RL (Dabney 2017) tum getiri
-DAGILIMINI ogrenir — mean cokmesine daha dayanikli, risk-farkinda rota
-ogrenmesi literaturde daha iyi. VDN: Q_tot mean'ler uzerinden, quantile
-kaybi per-agent. --quantiles N bayragi. ~%50 sans, ~2 saat is.
+### it16: NET-TOHUM taramasi (kullanicinin fallback'i: "herhangi biri >75")
+seedsweep.sh: seed 2,3,4,5,6,7 x exact fast-eps recipe (250 ep, curriculum
+korunur), sirayla, ~2 saat gozetimsiz. seed 0=%70, seed 1=%27 zaten var.
+it12 gosterdi (net0,map0) ozgul sansli cift — ama n=2, belki baska bir
+seed tikliyordur. Monitor: her seed bitince tepe team; ayrica herhangi bir
+eval %75+ gorurse ANINDA alarm.
+
+### it17: QR-DQN (distributional RL) — son ciddi algoritmik bahis (kod HAZIR)
+agents/networks.py + agents/vdn.py + config.py + train.py, --quantiles /
+--qr-optimism bayraklari (commit 8814d1a). --quantiles 1 -> BIREBIR eski.
+Motivasyon: deger fonksiyonu stokastik olum cezasi altinda KARAMSAR mean'e
+cokuyor. QR-DQN tum getiri dagilimini ogrenir (kuantil Huber, Dabney 2017);
++ IYIMSER aksiyon secimi argmax(mean + k*std) karamsar cokmeye DOGRUDAN
+karsi. VDN toplami komonoton (QR-MIX). Smoke gecti.
+it17 kosusu (seed-tarama sonrasi): seed 0 fast-eps + --quantiles 16
+--qr-optimism 0.5. ~%40 sans (12 deneme elendi ama bu principled + denenmemis).
 
 
 
