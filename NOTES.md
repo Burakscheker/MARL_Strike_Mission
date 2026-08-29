@@ -556,12 +556,11 @@ negatif. **greedy %70 = bu checkpoint'in GERCEK tavani.** %75'e giden tek
 yol: DAHA IYI DEGER FONKSIYONU (o 27 stall haritada oracle'in bulabildigi
 guvenli rotayi bulan). Oracle tavani %81.5 -> %70 = oracle'in %86'si.
 
-### it16: NET-TOHUM taramasi (kullanicinin fallback'i: "herhangi biri >75")
-seedsweep.sh: seed 2,3,4,5,6,7 x exact fast-eps recipe (250 ep, curriculum
-korunur), sirayla, ~2 saat gozetimsiz. seed 0=%70, seed 1=%27 zaten var.
-it12 gosterdi (net0,map0) ozgul sansli cift — ama n=2, belki baska bir
-seed tikliyordur. Monitor: her seed bitince tepe team; ayrica herhangi bir
-eval %75+ gorurse ANINDA alarm.
+### it16: NET-TOHUM taramasi — seed 2 = %48, KESILDI (GPU'yu QR-DQN'e verdim)
+seed 0=%70, seed 1=%27, **seed 2=%48**. Yuksek varyans dogrulandi;
+seed 0 yuksek outlier, gerisi ~%40-50 kumelesıyor. seeds 3-7 dusuk-olasilik
+(hicbiri %75'e yakin degil) -> tarama kesildi, QR-DQN (daha yuksek EV)
+GPU'yu aldi. Gerekirse gece seeds 3-7 devam.
 
 ### it17: QR-DQN (distributional RL) — son ciddi algoritmik bahis (kod HAZIR)
 agents/networks.py + agents/vdn.py + config.py + train.py, --quantiles /
