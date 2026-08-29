@@ -289,6 +289,42 @@ Test: it4_vdn_s0_ms8k. Kritik: checkpoint HEM 8000 HEM 4000 adimda eval edilecek
 Burak'in; ben sadece SAYIYI olcuyorum.
 | ep | team% (8000-eval) | not |
 |----|-------------------|-----|
+| 15 | 25.0 | VARIS %75 ama olu 1.43 (4000'de %65/olu 0.35) — 8000'de ajan hedefe gidiyor ama zara giriyor |
+| 30 | 0.0  | TAM COKUS. inner_total 204 (ic halkalari DELIP geciyor). VARIS %0. |
+=> --max-steps 8000 fast-eps recipe'i KOTULESTIRIYOR. Ekstra sure "duz git,
+zarı ye" stratejisini erken karli yapiyor -> ajan onu ogrenip cokuyor.
+config.MAX_STEPS DOKUNULMADI (it4 sadece CLI). 4000 + %69 en iyi kaliyor.
+
+---
+## it2-it4 NIHAI VERDICT (2026-08-29 ~15:00)
+
+**EN IYI SONUC: `runs/ckpt/it2_vdn_epsfast.pt` = team_success %69.0** (100-harita
+authoritative). Recipe: `--algo vdn --episodes 250 --n-envs 32 --device cuda
+--eval-every 25 --eval-episodes 40 --seed 0 --eps-start 0.1`, ~ep25 checkpoint.
+KOD DEGISIKLIGI YOK — tek CLI bayragi.
+
+Baslangic %33 -> %69 (2.1x). Ama HEDEF %75'e ULASILAMADI. %69'u gecmek icin
+denenen 4 yol, HEPSI basarisiz:
+| it | ne | sonuc |
+|----|----|-------|
+| it2c | coklu tohum (s1,s2,s3) | seed 0 outlier — s1 %27, digerleri de zayif |
+| it2d | sabit eps (--eps-end 0.1) | ~%48 plato, decay'liden KOTU |
+| it3  | R_UNNECESSARY_RISK 20->0 | byte-byte AYNI (penalty tetiklenmiyor) — GERI ALINDI |
+| it4  | --max-steps 8000 | ep30'da tam cokus (ic halka deliyor) |
+
+**%75 icin (codex donunce / Burak karari):**
+1. Deeper RL: greedy-vs-training boslugu (egitim MA %68, greedy eval %47-65).
+   Kucuk kesif greedy'yi duzeltiyor -> greedy politika bazi haritalarda
+   donguye giriyor. Bunu cozmek (double-Q duzeltme, farkli target update,
+   veya eval-time kucuk eps) %69->%75+ acabilir.
+2. Coklu-tohum + en iyisini sec: yeterince tohum denenirse biri %75 verebilir
+   (seed 0 zaten %69, varyans yuksek).
+3. MAX_STEPS: DENENDI (it4), fast-eps'te ise yaramadi. Ama YAVAS-eps + 8000
+   birlikte (eski %46 recipe'i) denenmedi.
+
+**Repo:** temiz. config.py = baseline (R_UNNEC 20, MAX_STEPS 4000) + it3
+"denendi/geri alindi" yorumu. Kod DEGISMEDI. it2_vdn_epsfast.pt (%69) + tum
+loglar runs/'da.
 
 NOT (altyapi dersi): looping bash script TaskStop'a dayanikli degil (loop
 devam edip yeni kosu baslatiyor). Tek-kosu script + oto-kill kullan.
