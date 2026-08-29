@@ -578,10 +578,23 @@ action-gap'in (~0.03) 10-50 kati -> politika hep yuksek-varyansli ("hedefe
 dogru riskten gec") aksiyonu seciyor -> olum. Optimism egitimde de aktif
 (buffer pervasiz trajektorilerle doluyor). 0.5 COK fazla.
 
-### it17b (optimism 0.0): risk-notr QR-DQN — distributional TEK BASINA ne yapar?
-16 kuantil, iyimserlik yok, duz mean argmax. Izole soru: kuantil Huber
-kaybi + dagilim ogrenmek skaler VDN'den (=%70) farkli mi? Farkliysa
-(iyi/kotu) bilgi; ayniysa optimism tek lever ve KUCUK olmali (0.05-0.15).
+### it17b (optimism 0.0): risk-notr QR-DQN — DE ELENDI
+eval ep15 team %2 olu 1.74 / ep30 team %18 olu 1.56. Distributional TEK
+BASINA da pervasiz + yavas. 80-cikis basligi (16 kuantil x 5 aksiyon)
+fast-eps butcesinde 'guvenli rota'yi ogrenmiyor — Dueling/LayerNorm/batch256
+ile AYNI kader (Q-basligi degisikligi = fast-eps recipe'i bozar).
+**QR-DQN ELENDI.**
+
+### it18: TRAIN/EVAL ZORLUK UYUMSUZLUGU (yeni acinim!)
+curriculum_n_radar(ep, 250) frac=0.6 ile: ep25 -> **12 radar**, ep50 -> 15.
+Ama EVAL her zaman 25 radar. **Fast-eps ckpt'i (~ep25, %70) KOLAY 12-radar
+haritalarda egitilip ZOR 25-radar eval'da olculuyor.** ~15 denemedir bunu
+gozden kacirdim.
+--curriculum-frac 0.1 -> ep25'te 25 radara ulasir (hala rampali 11->25).
+it18a: seed 0 fast-eps + --curriculum-frac 0.1. eval-every 10.
+Beklenti: ckpt dogru zorlukta egitilir -> %70 -> ? Risk: config uyarisi
+"yogun uctan basla = hic basari gorme" — ama 0.1 rampali. ep15-25 VARIS %0
+= cok hizli -> frac 0.2 dene.
 
 
 
