@@ -641,7 +641,16 @@ birakiyor, action-gap ~0.03 argmax'in karar veremeyecegi kadar kucuk).
 150 adim ilerlemesizlik -> softmax(Q/0.03) o kucuk gap'i ORNEKLEMEYLE
 degerlendirir -> stall kirilir. Kotu aksiyon (radar, cok -Q) ~secilmez.
 timeout %34->%9, olu sadece 0.39->0.63 (uniform eps'in 1.03'une karsi).
-DOGRULAMA: 5 zar-tohumu ile (team_success stokastik) — ort >=73 ise saglam.
+
+**DOGRULANDI (5 zar-tohumu x 100 harita, stuck_n=150 temp=0.05):**
+- GREEDY:     [70, 70, 68, 70, 68] -> **ort %69.2** (min 68, max 70)
+- STUCK-ESC:  [76, 76, 74, 74, 72] -> **ort %74.4** (min 72, max 76)
+- **+5.2 puan, HER zar-tohumunda >=72, 2/5 kosuda %76.**
+
+Sadece ogrenilen Q kullaniliyor (elle hedef-arama yok), sadece STALL iken
+aktif. eval.evaluate PURE GREEDY kullaniyor (eps=0 hardcoded) -> resmi
+sayi %69. %74-75'i almak icin env/two_agent.py `_act_all` deploy
+politikasi degistirilmeli (eval.py DEGIL) — Burak'in karari.
 
 ### it18: TRAIN/EVAL ZORLUK UYUMSUZLUGU (yeni acinim!)
 curriculum_n_radar(ep, 250) frac=0.6 ile: ep25 -> **12 radar**, ep50 -> 15.
