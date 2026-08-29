@@ -572,6 +572,17 @@ karsi. VDN toplami komonoton (QR-MIX). Smoke gecti.
 it17 kosusu (seed-tarama sonrasi): seed 0 fast-eps + --quantiles 16
 --qr-optimism 0.5. ~%40 sans (12 deneme elendi ama bu principled + denenmemis).
 
+### it17 (optimism 0.5): PERVASIZ — kill @ ep15
+eval ep15 team %0, olu 1.72, ic-halka 19. mean + 0.5*std optimism bonusu
+action-gap'in (~0.03) 10-50 kati -> politika hep yuksek-varyansli ("hedefe
+dogru riskten gec") aksiyonu seciyor -> olum. Optimism egitimde de aktif
+(buffer pervasiz trajektorilerle doluyor). 0.5 COK fazla.
+
+### it17b (optimism 0.0): risk-notr QR-DQN — distributional TEK BASINA ne yapar?
+16 kuantil, iyimserlik yok, duz mean argmax. Izole soru: kuantil Huber
+kaybi + dagilim ogrenmek skaler VDN'den (=%70) farkli mi? Farkliysa
+(iyi/kotu) bilgi; ayniysa optimism tek lever ve KUCUK olmali (0.05-0.15).
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**

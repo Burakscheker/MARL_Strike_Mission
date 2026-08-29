@@ -544,6 +544,13 @@ def main():
     ap.add_argument("--n-radar", type=int, default=None,
                     help="radar sayisini SABITLE (curriculum'u kapatir). "
                          "Verilmezse 10->40 rampasi kullanilir.")
+    ap.add_argument("--curriculum-frac", type=float, default=None,
+                    help="C.CURRICULUM_FRAC override (varsayilan 0.6 = egitimin "
+                         "%%60'inda 25 radara ulasir). TESHIS: fast-eps ckpt'i "
+                         "~ep25'te seciliyor ama curriculum orada daha ~12 "
+                         "radarda — ckpt KOLAY haritalarda egitilip 25-radar "
+                         "(zor) eval'da olculuyor. 0.1 -> ep25'te 25 radara "
+                         "ulasir (train/eval zorlugu eslesir).")
     ap.add_argument("--lr", type=float, default=None,
                     help="optimizer LR'ini gecici override et (varsayilan config'teki "
                          "*_LR). BC-checkpoint'ten RL fine-tune ederken onemli: BC, "
@@ -657,6 +664,10 @@ def main():
     eval_every = args.eval_every or getattr(C, f"{algo.upper()}_EVAL_EVERY")
     tag = args.tag or f"{algo}_s{args.seed}"
     map_seed = args.map_seed if args.map_seed is not None else args.seed
+    if args.curriculum_frac is not None:
+        C.CURRICULUM_FRAC = args.curriculum_frac   # curriculum_n_radar cagri aninda re-read eder
+        print(f"curriculum-frac override: {args.curriculum_frac} "
+              f"(25 radara ~ep{int(args.curriculum_frac * episodes)}'te ulasir)")
     os.makedirs(os.path.join(C.RUNS_DIR, "ckpt"), exist_ok=True)
 
     print(C.summary())
