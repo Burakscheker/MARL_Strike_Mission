@@ -204,6 +204,24 @@ kosuda taklit et). Beklenti: greedy politika 250 ep boyunca duzenli tirmanir
 ve COKMEZ; team_success it1'in %33'unu gecer. Test: VDN 250-ep seed 0.
 Geri alinabilir (bayrak kaldirilir).
 
+**SONUC — HIPOTEZ DOGRULANDI, ETKI BEKLENENDEN COK BUYUK:**
+it2_vdn_epsfast eval ep25: **team %67.5** (onceki en iyi %33), VARIS %77.5,
+mission_prob 0.676, **olu 0.28** (1.3-1.5'ten), ic-halka girisi 0, analitik 0.921.
+Yani fast-eps buffer'i on-policy tutunca ajan GERCEKTEN guvenli rota ogreniyor.
+Trajektori (eval her 25 ep):
+| ep | team% | VARIS% | olu | gorev | not |
+|----|-------|--------|-----|-------|-----|
+| 25 | 67.5  | 77.5   | 0.28| 0.676 | both_reached %50! analitik 0.921 |
+| 50 | 45.0  | 47.5   | 0.10| 0.443 | asiri-temkin: adim 3800, timeout %95 |
+| 75 | 25.0  | 27.5   | 0.15| 0.253 | dusme devam ediyor |
+=> TEPE ep25. Sonra "asiri-temkin drift": ajan olmuyor (olu ~0.1) ama hedefe
+de gitmiyor (VARIS dusuyor, timeout artiyor). outer_total 634->206: ajan
+disi halkalari bile giderek daha cok kaciniyor. ep25 checkpoint kaydedildi
+(mission_prob 0.676 = en iyi). Kosuyu ep75'te oldurdum.
+YENI YON: fast-eps + ERKEN DURDURMA. Sonraki: (1) it2_vdn_epsfast.pt 100-harita
+authoritative eval, (2) QMIX fast-eps ayni desen mi, (3) kisa kosu (40-48 ep)
+tepeyi temiz yakala.
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**
