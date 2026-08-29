@@ -476,11 +476,44 @@ mimariye her mudahale "hedefe var + guvende kal" dengesini BOZUYOR. Training
 MA %74.7'ye ulasiyor (ep75) — politika IYI olabiliyor, greedy cikarim
 basarisiz. Tek ise yarayan: fast-eps + erken ckpt (denge'yi ERKEN yakala).
 
-### it12: COKLU TOHUM + ENSEMBLE (kullanici: "herhangi biri >75")
-Vanilla fast-eps recipe, seed 1/2/3 (seed 0 = %69 zaten var). Her biri 250 ep.
-Sonra: (a) en iyi tek tohum, (b) 4-net Q-ortalama ensemble argmax (standart
-varyans-azaltma, denenmemis). it2c'de "seed 1 %27.5" vardi ama fast-eps
-ATILIMI ONCESI kaba-grid olcumdu — dogru recipe + ince eval ile yeniden.
+### it12: --map-seed TESHISI — %69 SAGLAM DEGIL, ozgul sansli bilet
+`--map-seed` eklendi (egitim harita dizisini ag-init'ten ayirir).
+| kosu | net_seed | map_seed | ep10 | ep20 |
+|------|----------|----------|------|------|
+| it10 (=it2) | 0 | 0 | %36 (VARIS 98) | %64 |
+| it12a | 1 | 0 | %10 (VARIS 16) | **%0** |
+| it12b | 0 | 1 | %16 (VARIS 14) | (kill) |
+| it2c_s1 | 1 | 1 | %2.5 | %27.5 (tepe) |
+
+**SONUC: (net0, map0) KOMBINASYONU tikliyor. Yarisini boz -> cokuyor.**
+Seed 0'in iyi haritalari kotu ag-init'i KURTARMIYOR; seed 0'in iyi ag'i
+kotu haritalarla COKUYOR. %69 tek bir sansli (net,map) cifti — kolay
+transfer edilemez. Kok neden: 250-ep fast-eps KARARSIZ (yuksek gradyan
+varyansi, config.py batch notu).
+
+### it13: --vdn-batch 256 — TERS TEPKI, batch buyutmek COKERTIYOR
+seed 0 + batch 256: eval ep15 %14 (VARIS %16, adim 3760 = timeout).
+batch-128 seed-0 ep15 ~%65 (it2b_s0). 2x batch -> ~50 puan DUSUS.
+**MEKANIZMA: buyuk batch = temiz gradyan = deger fonksiyonu KARAMSAR
+sabit-noktasina DAHA HIZLI yakinsiyor. Kucuk-batch gurultusu politikanin
+o asiri-temkin yerel-optimuma OTURMASINI ENGELLIYORDU** — tipki eps
+gurultusu gibi. (config batch 32->128 notu: o LONG-run kaosunu duzeltmisti,
+farkli rejim.)
+
+### PATTERN (it7-it13): GURULTU YARDIM EDER, keskinlestirme ZARAR
+- YARDIM: eps gurultusu (fast-eps %33->%69), kucuk-orta batch
+- ZARAR: batch 256 (hizli yakinsama), LayerNorm (sinyal yok), AL (gap
+  keskinlestir -> emin-ama-temkinli), Munchausen (Q duzlestir -> kotu argmax),
+  Dueling (yavas)
+Kok: temiz/hizli/keskin ogrenme -> KARAMSAR asiri-temkin deger sabit-noktasina
+daha hizli oturuyor. Cozum yonu: DAHA COK gurultu / anti-yakinsama.
+
+### it14: --vdn-batch 64 (TERS yon — daha cok gurultu)
+Hipotez dogrudan: batch 128->256 zarar verdiyse 128->64 yardim etmeli
+(daha yavas yakinsama, daha cok gradyan gurultusu = pessimism'e oturmayi
+geciktirir). seed 0, exact recipe + --vdn-batch 64, eval-every 10 (erken/
+keskin tepe icin). Watch: config'in "batch 32 kaotikti" uyarisi — 64 cok
+gurultuluyse ep10-20 ziplar.
 
 
 
