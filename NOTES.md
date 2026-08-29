@@ -372,6 +372,25 @@ sorunu, shaping artefakti DEGIL. GERI ALINDI (git revert 4a83e72).
 - %75 icin geriye: "deeper RL" (greedy politika kirilganligi / kredi atama) —
   daha buyuk arastirma isi, hizli bir bayrakla degil.
 
+### it7 — Dueling mimari + fast-eps (KOD DEGISIKLIGI YOK, --dueling zaten var)
+Beklenti: greedy politika action-gap cokmesinden salinima giriyor; Dueling
+V(s)/A(s,a)'yi mimari ayirir -> greedy eval training'e yaklasir (%65->%69+).
+SONUC: **ELENDI (ep25'te oldu).** training MA %8 (it2 ayni noktada %48),
+olu(ma) 1.92 (pervasiz), 14.2 s/ep (2x yavas). Rastgele init A-head'i 250
+episode'da (fast-eps recipe) toparlamiyor. Kill @ ep25.
+
+### it8 — Advantage Learning operatoru (Bellemare 2016) — KOD DEGISIKLIGI
+config.py `AL_ALPHA_DEFAULT=0.9` + `agents/vdn.py` learn() AL dali +
+`train.py --al-alpha`. Hepsi bayrak-arkasi, al_alpha=0.0 -> BIREBIR eski.
+Gerekce: q_gap probu OLCTU — it2 en iyi ckpt (ep25) gap=0.033, eval-cokus
+ep50 gap=0.021; FA gurultusuyle ayni mertebe. AL: T_AL Q = r+g*V(s') -
+alpha*(V(s)-Q(s,a)); greedy'de 0 (politika korunur), non-greedy asagi ->
+gap ~1/(1-alpha)=10x. Sicaklik yok, tek knob. n-adim (GAMMA notu) ve
+soft-target (PER notu) elenmislerinden farkli: ufka/target ritmine dokunmaz.
+Beklenti: greedy eval team_success %69 -> %75+; q_gap 0.03 -> ~0.2+.
+Once diagnostik: eval_eps.py (it2 ckpt, eps in [0,.02,.05,.1,.2], 100 harita,
+batched/CUDA) — eps>0 belirgin iyi = AL hipotezi dogru yonde.
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**

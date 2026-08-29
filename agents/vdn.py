@@ -185,7 +185,7 @@ class VDNAgent:
                  learn_start: int = VDN_LEARN_START,
                  target_update: int = VDN_TARGET_UPDATE,
                  eps_end: float = EPS_END, dueling: bool = False,
-                 prioritized: bool = False):
+                 prioritized: bool = False, al_alpha: float = 0.0):
         self.device = torch.device(device)
         self.n_actions = n_actions
         torch.manual_seed(seed)
@@ -202,6 +202,9 @@ class VDNAgent:
         # PER importance-sampling agirligi — train.py episode basina anneal
         # eder (bkz. set_per_beta). prioritized=False'ta hic kullanilmaz.
         self.per_beta = PER_BETA_START
+        # ADVANTAGE LEARNING carpani (bkz. config.py AL_ALPHA_DEFAULT + learn()).
+        # 0.0 = kapali, learn() eskisiyle BIREBIR AYNI.
+        self.al_alpha = float(al_alpha)
 
         self.online = {AGENT_1: build_qnet(n_actions, dueling=dueling).to(self.device),
                        AGENT_2: build_qnet(n_actions, dueling=dueling).to(self.device)}
@@ -329,6 +332,21 @@ class VDNAgent:
             nq1 = self.target[AGENT_1](next_obs1).gather(1, best1).squeeze(1)
             nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
             target_val = r + GAMMA * (nq1 + nq2) * (1.0 - done)
+
+            # ADVANTAGE LEARNING (Bellemare ve ark. 2016, bkz. config.py
+            # AL_ALPHA_DEFAULT): ALINAN aksiyonun greedy'den geriligi kadar
+            # hedefi DUSER — greedy'de fark 0, non-greedy'de action-gap'i
+            # ~1/(1-alpha) katina cikarir. V(s)/Q(s,a) TARGET agdan (bootstrap
+            # ile tutarli), CARI gozlemde. Depoda cari maske YOK: NOOP her
+            # zaman legal, 4 yon sadece grid kenarinda illegal (nadir) — ham
+            # max orada V'yi hafif SISIRIR, yani AL duzeltmesi kenarda biraz
+            # fazla agresif; kabul edilir bir yanlilik.
+            if self.al_alpha > 0.0:
+                tq1c = self.target[AGENT_1](obs1)
+                tq2c = self.target[AGENT_2](obs2)
+                gap1 = tq1c.max(dim=1).values - tq1c.gather(1, a1.unsqueeze(1)).squeeze(1)
+                gap2 = tq2c.max(dim=1).values - tq2c.gather(1, a2.unsqueeze(1)).squeeze(1)
+                target_val = target_val - self.al_alpha * (gap1 + gap2)
 
         if per:
             # ONCELIKLI DENEYIM TEKRARI (PER, 2026-08-26): elementwise kayip,

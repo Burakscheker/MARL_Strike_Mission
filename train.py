@@ -57,12 +57,13 @@ RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
 
 def build_agent(algo: str, seed: int, device: str, lr: float = None,
                 eps_end: float = None, dueling: bool = False,
-                prioritized: bool = False):
+                prioritized: bool = False, al_alpha: float = 0.0):
     if algo == "vdn":
         return VDNAgent(seed=seed, device=device,
                          lr=lr if lr is not None else C.VDN_LR,
                          eps_end=eps_end if eps_end is not None else C.EPS_END,
-                         dueling=dueling, prioritized=prioritized)
+                         dueling=dueling, prioritized=prioritized,
+                         al_alpha=al_alpha)
     if algo == "qmix":
         return QMixAgent(seed=seed, device=device,
                           lr=lr if lr is not None else C.QMIX_LR)
@@ -559,6 +560,14 @@ def main():
                          "(olum, varis, riskli giris) TD-hatasi buyuklugune "
                          "gore daha sik ornekler. Varsayilan KAPALI (uniform "
                          "ornekleme, eski davranis).")
+    ap.add_argument("--al-alpha", type=float, default=None,
+                    help="SADECE vdn: Advantage Learning operatoru (Bellemare "
+                         "ve ark. 2016, 'Increasing the Action Gap'). TD "
+                         "hedefinden alinan aksiyonun greedy'den geriligini "
+                         "alpha kadar duser -> action-gap ~1/(1-alpha) katina "
+                         "cikar, greedy politika korunur. Sicaklik YOK. "
+                         "Varsayilan KAPALI (0.0); tipik deger 0.9. Bkz. "
+                         "config.py AL_ALPHA_DEFAULT.")
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
@@ -597,9 +606,10 @@ def main():
     env = StrikeMissionEnv(max_steps=args.max_steps, seed=args.seed,
                            alert_enabled=args.alert,
                            risk_shaping=not args.no_risk_shaping)
+    al_alpha = args.al_alpha if args.al_alpha is not None else 0.0
     agent = build_agent(algo, args.seed, args.device, lr=args.lr,
                         eps_end=args.eps_end, dueling=args.dueling,
-                        prioritized=args.prioritized)
+                        prioritized=args.prioritized, al_alpha=al_alpha)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -718,6 +728,9 @@ def main():
               + (", dueling mimari" if args.dueling else ""))
     elif algo == "vdn" and args.dueling:
         print("dueling mimari acik (PER kapali)")
+    if algo == "vdn" and al_alpha > 0.0:
+        print(f"Advantage Learning acik: alpha={al_alpha} "
+              f"(action-gap ~{1.0/(1.0-al_alpha):.1f}x hedeflenir)")
 
     t_start = time.perf_counter()
     best = -1.0   # mission_prob

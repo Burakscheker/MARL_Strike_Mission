@@ -456,6 +456,32 @@ VDN_LEARN_START = 2_000
 VDN_LR = 3e-5
 VDN_TARGET_UPDATE = 4_000
 
+# ADVANTAGE LEARNING operatoru (Bellemare ve ark. 2016, "Increasing the Action
+# Gap") — 2026-08-29, SAF RL denemesi. Motivasyon dogrudan olculmus bir olgu:
+# train.py'nin q_gap probu it2_vdn_epsfast kosusunda EN IYI checkpoint'te (ep25)
+# 0.033, eval'in coktugu ep50'de 0.021 — yani en iyi ile ikinci aksiyon
+# arasindaki Q farki fonksiyon-yaklasiminin gurultusuyle AYNI mertebede.
+# Politika argmax Q oldugu icin greedy eval bazi haritalarda salinima giriyor
+# (training MA %68 ama greedy %47-65). `--eps-start 0.1` bunu buffer'i on-policy
+# tutarak GECIKTIRIYOR ama Q siskinligi/gap daralmasi devam ediyor (mean
+# 1.17->2.66, gap sabit ~0.02-0.04, ilk 75 ep).
+#
+# AL operatoru: TD hedefinden, ALINAN aksiyonun greedy'den ne kadar geride
+# oldugu kadarini (target agiyla olculur) alpha carpaniyla DUSER:
+#     T_AL Q(s,a) = r + g*V(s') - alpha*(V(s) - Q(s,a))
+# GREEDY aksiyon icin V(s)-Q(s,a)=0 -> hedef DEGISMEZ; greedy politika
+# KORUNUR (Bellemare Teorem 1). Non-greedy (kesif) aksiyonlar sistematik
+# olarak asagi cekilir -> action-gap ~1/(1-alpha) katina cikar. Sicaklik/
+# entropi YOK (Munchausen'in aksine) — tek hiperparametre alpha.
+# VDN'de toplamsal: V_tot(s)-Q_tot(s,a) = (V_1-Q_1(s,a_1)) + (V_2-Q_2(s,a_2)).
+#
+# al_alpha=0.0 (varsayilan / bayrak yok) -> learn() BIREBIR ESKISI. Deney
+# --al-alpha 0.9 ile acilir (Bellemare'in Atari'de saglam buldugu deger).
+# n-ADIM (2026-08-17, config.py GAMMA notu) ve soft-target (2026-08-16, PER
+# notu) gibi elenmislerden FARKLI: getiri ufkuna da target-guncelleme
+# ritmine de dokunmaz, sadece hedef degerine kosullu bir dusum ekler.
+AL_ALPHA_DEFAULT = 0.9
+
 # OGRETMEN-CAPASI (teacher-anchored VDN, 2026-08-26, dis inceleme onerisi):
 # vanilla BC->TD fine-tune (train_bc.py cikisindan --resume-from ile devam)
 # COKTU — 25 episode'da mission_prob 0.0001'e dustu (BC-oncesi: %42 takim,
