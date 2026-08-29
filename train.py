@@ -58,14 +58,18 @@ RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
 def build_agent(algo: str, seed: int, device: str, lr: float = None,
                 eps_end: float = None, dueling: bool = False,
                 prioritized: bool = False, al_alpha: float = 0.0,
-                munchausen_tau: float = 0.0, layernorm: bool = False):
+                munchausen_tau: float = 0.0, layernorm: bool = False,
+                vdn_batch: int = None, vdn_target_update: int = None):
     if algo == "vdn":
         return VDNAgent(seed=seed, device=device,
                          lr=lr if lr is not None else C.VDN_LR,
                          eps_end=eps_end if eps_end is not None else C.EPS_END,
                          dueling=dueling, prioritized=prioritized,
                          al_alpha=al_alpha, munchausen_tau=munchausen_tau,
-                         layernorm=layernorm)
+                         layernorm=layernorm,
+                         batch_size=vdn_batch if vdn_batch is not None else C.VDN_BATCH,
+                         target_update=(vdn_target_update if vdn_target_update
+                                        is not None else C.VDN_TARGET_UPDATE))
     if algo == "qmix":
         return QMixAgent(seed=seed, device=device,
                           lr=lr if lr is not None else C.QMIX_LR)
@@ -586,6 +590,17 @@ def main():
                          "cokmesine direnir. Varsayilan KAPALI (0.0); tipik "
                          "0.03. >0 ise --al-alpha yok sayilir. Bkz. config.py "
                          "MUNCHAUSEN_ALPHA.")
+    ap.add_argument("--vdn-batch", type=int, default=None,
+                    help="SADECE vdn: replay batch boyutu override (varsayilan "
+                         "C.VDN_BATCH=128). 32->128 kaotik ziplama/cokusu "
+                         "azaltmisti (config.py notu); 256 DENENMEDI — gradyan "
+                         "varyansini yariya indirir, 250-ep fast-eps'in tohum "
+                         "lotaryasini (seed 0 iyi, seed 1 %%27) yumusatabilir.")
+    ap.add_argument("--vdn-target-update", type=int, default=None,
+                    help="SADECE vdn: hard target sync araligi (adim) override "
+                         "(varsayilan C.VDN_TARGET_UPDATE=4000). YAVAS yon "
+                         "DENENMEDI (soft/Polyak denenip elenmisti) — daha "
+                         "kararli regresyon hedefi = daha az kaotik ogrenme.")
     ap.add_argument("--layernorm", action="store_true",
                     help="SADECE vdn: Q-agi gizli katmanlarindan sonra LayerNorm "
                          "(BroNet/CrossQ, plasticity-loss literaturu). Belgeli "
@@ -642,7 +657,9 @@ def main():
     agent = build_agent(algo, args.seed, args.device, lr=args.lr,
                         eps_end=args.eps_end, dueling=args.dueling,
                         prioritized=args.prioritized, al_alpha=al_alpha,
-                        munchausen_tau=munchausen_tau, layernorm=args.layernorm)
+                        munchausen_tau=munchausen_tau, layernorm=args.layernorm,
+                        vdn_batch=args.vdn_batch,
+                        vdn_target_update=args.vdn_target_update)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -769,6 +786,8 @@ def main():
               f"clip={C.MUNCHAUSEN_CLIP} (AL'i kapsar + entropi bootstrap)")
     if algo == "vdn" and args.layernorm:
         print("LayerNorm acik: Q-agi gizli katmanlari normalize (Q-iraksama karsiti)")
+    if algo == "vdn" and (args.vdn_batch or args.vdn_target_update):
+        print(f"VDN override: batch={agent.batch_size}  target_update={agent.target_update}")
 
     t_start = time.perf_counter()
     best = -1.0   # mission_prob
