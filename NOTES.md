@@ -15,7 +15,8 @@ throughput KOD degisikligi yapmadim. Bunun yerine bosta GPU'yu ASIL hedefe
 **%75'e ulasilamadi. Ulasilamaz da — mevcut kurulumla.** Kanit:
 - QMIX 500-ep: ep50 %5 -> ep100 %2.5 -> ep150 %0. Coktu.
 - VDN 300-ep (seed 2): ep25 %5 -> ep75..150 %0. Ayni cokus, eps tabana inince toparlamadi.
-- Tohum taramasi (48-ep): QMIX s0=%37.5(sans) s1=%7.5 s3=%2.5 ; VDN s0=%25 ...
+- Tohum taramasi (48-ep, 4 tohum): QMIX s0=%37.5(SANS) s1=%7.5 s3=%10 ;
+  VDN s0=%25(sans) s1=%5 s2=cokus s3=%2.5. Medyan ~%5.
 - MAPPO/HAPPO: %5-7.5, koordinasyon yok (route_overlap 1.0).
 
 **Cokus mekanizmasi** (yeni gozlem, degerli): ~ep50-150 arasi anlamli epsilon'la
@@ -46,9 +47,14 @@ saglanmadigi icin DUR kosulu tetiklemedi.)
    harita insasini onler.
 3. ppo rollout/eval while-loop'unda BITEN env'leri isleme sokmama (straggler).
 
-**Repo durumu:** temiz. 3 commit atildi (7f5b4d0 WIP checkpoint, 57169bd it1
-baseline+codex engeli, 612e428 uzun kosu cokusu). KOD DEGISMEDI, sadece
-NOTES.md + yeni runs/ loglari. Orphan surec yok.
+**Repo durumu:** temiz. KOD DEGISMEDI (git diff 7f5b4d0..HEAD sadece NOTES.md).
+`python -m tests.test_env` -> TUM TESTLER GECTI (WIP baseline saglam). Orphan
+python sureci YOK. (Not: 06:45'ten beri idle bir `codex` sureci var — benim
+degil, dokunmadim.)
+
+**3 saatlik pencerede daha fazla egitim kosusu YAPMADIM** bilerek: cokus deseni
+5 kosuda (2 uzun + sweep) net dogrulandi, tekrar re-confirm etmek GPU israfi.
+Elimdeki tam resim bu.
 
 ---
 
@@ -130,11 +136,22 @@ Hipotez: kisa kosu eps'i ep24'te tabana indirir -> politika "urkek cokus"ten
 ONCE greedy'ye zorlanir -> temiz snapshot. Farkli tohum daha yuksek tepe verebilir.
 | kosu | en iyi eval team% (hangi ep) | not |
 |------|------------------------------|-----|
-| sw_qmix_s1 | ep36 %7.5 (0/5/7.5/5) | VARIS max %25. |
-| sw_qmix_s3 | ep36 %2.5 (.../2.5/0) | ep48 tam cokus. |
-| sw_vdn_s1  | ... | |
-| sw_vdn_s3  | ... | |
-QMIX tohumlari: s0 %37.5 (SANS), s1 %7.5, s3 %2.5 -> yuksek varyans, cogunlukla cokus.
+| sw_qmix_s1 | ep36 %7.5 (ep12/24/36/48: 0/5/7.5/5) | VARIS max %25. |
+| sw_qmix_s3 | ep12 %10 (10/2.5/2.5/0) | ep48 tam cokus (VARIS %0). |
+| sw_vdn_s1  | ep36 %5 (2.5/0/5/0) | ep48 VARIS %5. |
+| sw_vdn_s3  | ep48 %2.5 (0/2.5/2.5/2.5) | hep ~%2.5, route_overlap ~1.0 (koordinasyon yok). |
+
+**Tam tablo (bu gece uretilen tum team_success tepe degerleri):**
+| algo  | s0 | s1 | s2 | s3 | uzun kosu |
+|-------|-----|-----|-----|-----|-----------|
+| QMIX  | %37.5 (SANS, ep48) | %7.5 | — | %10 | 500ep: ep150'de %0 |
+| VDN   | %25 (ep24) | %5 | cokus | %2.5 | 300ep: ep75+'da %0 |
+| MAPPO | %7.5 | — | — | — | — |
+| HAPPO | %5 | — | — | — | — |
+
+Medyan ~%5. %25-37.5 SADECE seed 0. => %75 mevcut kurulumla ULASILMAZ.
+s/ep: eval-every 12 (4 eval/48ep) -> ~16-20 s/ep; eval-every 24 (2 eval) -> ~11-13.
+Yani eval maliyeti s/ep'in ~%40'i. Codex donunce 1 numarali hedef bu (bkz. adaylar).
 
 ### Onemli gozlem
 it1'in yuksek sayilari (QMIX %37.5, VDN %25) 48-ep kosunun eps'i ep24'te
