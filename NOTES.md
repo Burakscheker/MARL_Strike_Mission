@@ -454,6 +454,34 @@ Beklenti: q_mean ~1-3'te kalir (it2: 1.17->2.15->2.66->...), eval ep25 SONRASI
 COKMEZ -> daha gec/yuksek tepe. Watch: q_mean dense'te patlarsa veya ep15/30
 it7-dueling gibi cok geride ise kill.
 
+### it11 NIHAI: LayerNorm KATASTROFIK — hedef-yonelimini oldurdu
+eval ep15 %20 (VARIS %20!) -> ep30 **%2.5** (VARIS %2.5, adim 3800 = hep
+timeout, olu 0.17). Baslik-ici LayerNorm hedef-yon MAGNITUDE sinyalini
+(dx/dy/dist_goal skalarlari) normalize edip yok ediyor -> ajanin hedefe
+GITME durtusu kayboluyor, sadece guvenli dolaniyor. Kill @ ep30.
+**How to apply: --layernorm baslikta DENEME.** (Belki conv'da veya
+affine'siz farkli olurdu ama bu yol simdilik kapali.)
+
+## it7-it11 OZET: 5 deneme, hicbiri %69'u gecmedi
+| it | ne | sonuc |
+|----|-----|-------|
+| it7 | Dueling | ep25 MA %8, yavas yakinsama — ELE |
+| it8 | Advantage Learning a=0.9 | gap 15x acildi ama asiri-temkin drift, tepe %45 |
+| it9 | Munchausen tau=0.02 | entropi Q'yu duzlestirdi, argmax bozuldu, %40 |
+| it10 | ince eval (vanilla) | GIZLI TEPE YOK — fast-eps tavani ~%67-69 kesin |
+| it11 | LayerNorm | KATASTROFIK, hedef-durtusu oldu, VARIS %2.5 |
+
+**TESHIS PEKISTI:** greedy argmax extraction sorunu, ama Q-fonksiyonuna /
+mimariye her mudahale "hedefe var + guvende kal" dengesini BOZUYOR. Training
+MA %74.7'ye ulasiyor (ep75) — politika IYI olabiliyor, greedy cikarim
+basarisiz. Tek ise yarayan: fast-eps + erken ckpt (denge'yi ERKEN yakala).
+
+### it12: COKLU TOHUM + ENSEMBLE (kullanici: "herhangi biri >75")
+Vanilla fast-eps recipe, seed 1/2/3 (seed 0 = %69 zaten var). Her biri 250 ep.
+Sonra: (a) en iyi tek tohum, (b) 4-net Q-ortalama ensemble argmax (standart
+varyans-azaltma, denenmemis). it2c'de "seed 1 %27.5" vardi ama fast-eps
+ATILIMI ONCESI kaba-grid olcumdu — dogru recipe + ince eval ile yeniden.
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**

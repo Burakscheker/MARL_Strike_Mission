@@ -494,6 +494,14 @@ def main():
     ap.add_argument("--algo", choices=["mappo", "happo", "vdn", "qmix"], required=True)
     ap.add_argument("--episodes", type=int, default=None)
     ap.add_argument("--seed", type=int, default=C.SEED)
+    ap.add_argument("--map-seed", type=int, default=None,
+                    help="EGITIM harita dizisini --seed'den AYIR (varsayilan: "
+                         "--seed ile ayni). --seed hala ag-init + kesif RNG'sini "
+                         "kontrol eder; --map-seed sadece VecStrikeEnv'in urettigi "
+                         "egitim haritalari dizisini. TESHIS: fast-eps seed 0 vs "
+                         "seed 1 arasi ~40 puanlik farkin ag-init sansindan mi "
+                         "yoksa harita-dizisi (curriculum) sansindan mi geldigini "
+                         "ayirir. Eval haritalari SABIT (eval_map_seeds), etkilenmez.")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--eval-every", type=int, default=None)
@@ -614,14 +622,17 @@ def main():
     episodes = args.episodes or getattr(C, f"{algo.upper()}_EPISODES")
     eval_every = args.eval_every or getattr(C, f"{algo.upper()}_EVAL_EVERY")
     tag = args.tag or f"{algo}_s{args.seed}"
+    map_seed = args.map_seed if args.map_seed is not None else args.seed
     os.makedirs(os.path.join(C.RUNS_DIR, "ckpt"), exist_ok=True)
 
     print(C.summary())
     print(f"\nalgo={algo}  episodes={episodes}  seed={args.seed}  tag={tag}")
+    if map_seed != args.seed:
+        print(f"harita-tohumu AYRI: map_seed={map_seed} (ag-init/kesif seed={args.seed})")
     print(f"alarm kuplaji={'ACIK' if args.alert else 'kapali'}  "
           f"risk-shaping={'kapali' if args.no_risk_shaping else 'acik'}\n")
 
-    env = StrikeMissionEnv(max_steps=args.max_steps, seed=args.seed,
+    env = StrikeMissionEnv(max_steps=args.max_steps, seed=map_seed,
                            alert_enabled=args.alert,
                            risk_shaping=not args.no_risk_shaping)
     al_alpha = args.al_alpha if args.al_alpha is not None else 0.0
@@ -715,7 +726,7 @@ def main():
         # dosya stringi, GAE episode sinirlarini net bilmek zorunda.
         fn = {"vdn": vdn_parallel_rollout, "qmix": qmix_parallel_rollout,
              "mappo": ppo_parallel_rollout, "happo": ppo_parallel_rollout}[algo]
-        roll = fn(agent, args.n_envs, args.max_steps, args.seed, episodes,
+        roll = fn(agent, args.n_envs, args.max_steps, map_seed, episodes,
                   args.n_radar, not args.no_risk_shaping, args.alert)
     else:
         roll = None
