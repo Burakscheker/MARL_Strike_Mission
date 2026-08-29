@@ -1,10 +1,49 @@
-# Gece throughput dongusu — 2026-08-29
+# Gece dongusu — 2026-08-29
 
 Amac: happo / mappo / qmix / vdn egit; herhangi birinin eval team_success'i
 %75'i gecerse DUR. Ikincil: 500 episode < 2.5 saat.
 
 ---
-## >>> SABAH OZETI (Burak, once bunu oku) <<<
+## >>> NIHAI DURUM (2026-08-29 gec saat, Burak once BUNU oku) <<<
+
+**En iyi: `runs/ckpt/it2_vdn_epsfast.pt` — team_success ~%70** (100-harita,
+yetkili eval). Recipe: `--eps-start 0.1` (tek CLI bayragi, KOD DEGISIKLIGI YOK),
+seed 0, 250 ep, ~ep25 checkpoint. Oracle tavani %81.5 -> %70 = oracle'in %86'si.
+
+**%75'e ULASILAMADI.** it7-it18: **~16 ciddi deneme, HICBIRI %70'i gecmedi:**
+
+| kategori | denenenler | sonuc |
+|----------|-----------|-------|
+| TD-hedef | Advantage Learning (a=0.9), Munchausen (tau 0.02) | AL: gap 15x acti ama tepe %45; Munchausen: Q duzlesti argmax bozuldu %40 |
+| mimari | Dueling, LayerNorm, QR-DQN (16q, opt 0/0.5) | hepsi fast-eps butcesinde "guvenli rota"yi ogrenemedi (pervasiz ya da timeout) |
+| hiperparametre | batch 64, batch 256, curriculum-frac 0.1 | 128/0.6 IKI YONDE de sweet spot; perturbasyon = cokus |
+| deployment | eps 0.02-0.1, Boltzmann temp 0.01-0.1 | timeout'u olume takas ediyor, NET NEGATIF |
+| baska | checkpoint-ensemble, multi-seed (2,3,4...) | ensemble korele=kotu; seed 1=%27 seed 2=%48 (seed 0 SANSLI outlier) |
+
+**KOK NEDEN:** `it2_vdn_epsfast.pt` %70 = DELIKANLI DENGELI bir yerel optimum.
+Deger fonksiyonu radar olum cezasini asiri-agirliklandirip KARAMSAR/asiri-temkin
+bir sabit-noktaya oturuyor. fast-eps + erken ckpt o oturmadan ONCE yakaliyor.
+Dengenin herhangi bir bileseni (batch, mimari, curriculum, target, seed)
+degisince cokuyor. O ~27 "stall" haritasinda greedy takiliyor ama HAREKET =
+radar-yogun bolgede olum riski; deger fonksiyonu DOGRU olarak reddediyor.
+
+**%75 icin gereken (senin kararin):**
+1. **Reward/senaryo:** `R_RISK_COEF` 65->~40 dusur (asiri-temkin cezasini
+   hafiflet), VEYA `MAX_STEPS` 4000->8000 geri al (Tolga kiyasi icin cekmistin).
+   Ikisi de senaryo config -> senin "dokunma" kuralinin disinda, senin cagrin.
+2. **Stokastik deploy politikasini "mesru" say:** eval.py eps=0 hardcoded ama
+   training-MA %74.7 (eps~0.07 ile). "VDN + risk-farkinda deploy = %74" gecerli
+   bir algoritma sonucu sayilabilir.
+3. **Cok daha uzun distributional RL** (QR-DQN 1000+ ep) — yavas, belirsiz.
+
+Saf VDN + mevcut config + greedy eval ile **%70 TAVAN** (yuksek guvenle).
+
+Kod: hepsi bayrak-arkasi (--al-alpha, --munchausen-tau, --layernorm, --quantiles,
+--qr-optimism, --vdn-batch, --vdn-target-update, --map-seed, --curriculum-frac,
+--save-all-ckpts). Varsayilan = eski davranis BIREBIR. tests/ 15/15.
+
+---
+## >>> ESKI SABAH OZETI (fast-eps ATILIMI ONCESI — artik guncel degil) <<<
 
 **Dongu 1. iterasyonda tikandi: `codex` kullanim limitinde (26 gun reset, Sep 24).**
 Senin tarif ettigin dongunun 4-5. adimlari (codex analiz -> onerisini uygula)
