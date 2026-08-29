@@ -482,6 +482,37 @@ VDN_TARGET_UPDATE = 4_000
 # ritmine de dokunmaz, sadece hedef degerine kosullu bir dusum ekler.
 AL_ALPHA_DEFAULT = 0.9
 
+# MUNCHAUSEN RL (Vieillard ve ark. 2020, "Munchausen Reinforcement Learning")
+# — 2026-08-29, it8 (AL) sonrasi. it8'in teshisi: AL action-gap'i ~15x genisletti
+# (q_gap 0.02->0.36) ama eval tavani %45'te kaldi (< it2 %69) cunku greedy
+# politika "kendinden emin ama asiri temkinli"ye kaydi — VARIS %95->%42, timeout.
+# Sorun action-gap DEGIL, KARAMSARLIK/rijit-temkin drifti.
+#
+# Munchausen ~= AL + ENTROPI (Vieillard Onerme 1: M-DQN'in implicit KL'i AL'i
+# KAPSAR, ustune yumusak/entropi-duzenlilestirilmis bootstrap ekler). Iki
+# parca:
+#   (1) odul artimi:  alpha * tau * log pi(a_t | s_t)   [clip l0..0]
+#       -> alinan aksiyonun log-olasiligini odule ekler. AL gibi gap acar
+#          (Vieillard) ama SUREKLI (her adim), sadece non-greedy'de degil.
+#   (2) yumusak bootstrap:  E_{a~pi}[ Q_tgt(s',a) - tau log pi(a) ]
+#          = sum_a pi(a) Q_tgt(a)  +  tau * H(pi)
+#       -> sert max yerine politika-ortalamasi + entropi bonusu. Entropi
+#          terimi politikayi STOKASTIK tutmaya iter -> rijit-temkin bir
+#          stratejiye COKMEYI cezalandirir (it8'in basarisiz oldugu nokta).
+# pi(.|s) = softmax(Q_tgt(.|s) / tau), LEGAL aksiyonlar uzerinden.
+#
+# tau: sicaklik. q_gap ~0.03 (AL'siz) uzerinden pi(best)~0.6 icin gap/tau~1-2
+# -> tau~0.02-0.03. M-DQN Atari varsayilani da 0.03 (orada da avantajlar Q'ya
+# gore kucuk). CANLI IZLE: q_mean ep25'te it2'nin ~10 katini gecerse (>12)
+# entropi siskinligi asiri -> tau'yu dusur.
+# alpha: 0.9 (M-DQN varsayilani, AL ile ayni). clip l0 = -1.
+#
+# munchausen_tau=0.0 (varsayilan) -> learn() BIREBIR ESKISI. --munchausen-tau
+# 0.03 ile acilir. AL ile AYNI ANDA kullanilmaz (Munchausen zaten AL'i kapsar);
+# ikisi verilirse Munchausen kazanir.
+MUNCHAUSEN_ALPHA = 0.9
+MUNCHAUSEN_CLIP = -1.0
+
 # OGRETMEN-CAPASI (teacher-anchored VDN, 2026-08-26, dis inceleme onerisi):
 # vanilla BC->TD fine-tune (train_bc.py cikisindan --resume-from ile devam)
 # COKTU — 25 episode'da mission_prob 0.0001'e dustu (BC-oncesi: %42 takim,

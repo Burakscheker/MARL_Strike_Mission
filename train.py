@@ -57,13 +57,14 @@ RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
 
 def build_agent(algo: str, seed: int, device: str, lr: float = None,
                 eps_end: float = None, dueling: bool = False,
-                prioritized: bool = False, al_alpha: float = 0.0):
+                prioritized: bool = False, al_alpha: float = 0.0,
+                munchausen_tau: float = 0.0):
     if algo == "vdn":
         return VDNAgent(seed=seed, device=device,
                          lr=lr if lr is not None else C.VDN_LR,
                          eps_end=eps_end if eps_end is not None else C.EPS_END,
                          dueling=dueling, prioritized=prioritized,
-                         al_alpha=al_alpha)
+                         al_alpha=al_alpha, munchausen_tau=munchausen_tau)
     if algo == "qmix":
         return QMixAgent(seed=seed, device=device,
                           lr=lr if lr is not None else C.QMIX_LR)
@@ -568,6 +569,14 @@ def main():
                          "cikar, greedy politika korunur. Sicaklik YOK. "
                          "Varsayilan KAPALI (0.0); tipik deger 0.9. Bkz. "
                          "config.py AL_ALPHA_DEFAULT.")
+    ap.add_argument("--munchausen-tau", type=float, default=None,
+                    help="SADECE vdn: Munchausen RL (Vieillard ve ark. 2020). "
+                         "Odule alpha*tau*log pi(a_t) ekler + sert max yerine "
+                         "yumusak (entropi-duzenli) bootstrap. AL'i KAPSAR + "
+                         "entropi terimi politikanin rijit bir stratejiye "
+                         "cokmesine direnir. Varsayilan KAPALI (0.0); tipik "
+                         "0.03. >0 ise --al-alpha yok sayilir. Bkz. config.py "
+                         "MUNCHAUSEN_ALPHA.")
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
@@ -607,9 +616,13 @@ def main():
                            alert_enabled=args.alert,
                            risk_shaping=not args.no_risk_shaping)
     al_alpha = args.al_alpha if args.al_alpha is not None else 0.0
+    munchausen_tau = args.munchausen_tau if args.munchausen_tau is not None else 0.0
+    if munchausen_tau > 0.0:
+        al_alpha = 0.0   # Munchausen AL'i kapsar; ikisi birden anlamsiz
     agent = build_agent(algo, args.seed, args.device, lr=args.lr,
                         eps_end=args.eps_end, dueling=args.dueling,
-                        prioritized=args.prioritized, al_alpha=al_alpha)
+                        prioritized=args.prioritized, al_alpha=al_alpha,
+                        munchausen_tau=munchausen_tau)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -731,6 +744,9 @@ def main():
     if algo == "vdn" and al_alpha > 0.0:
         print(f"Advantage Learning acik: alpha={al_alpha} "
               f"(action-gap ~{1.0/(1.0-al_alpha):.1f}x hedeflenir)")
+    if algo == "vdn" and munchausen_tau > 0.0:
+        print(f"Munchausen RL acik: tau={munchausen_tau}, alpha={C.MUNCHAUSEN_ALPHA}, "
+              f"clip={C.MUNCHAUSEN_CLIP} (AL'i kapsar + entropi bootstrap)")
 
     t_start = time.perf_counter()
     best = -1.0   # mission_prob

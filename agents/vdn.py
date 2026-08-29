@@ -29,7 +29,8 @@ import torch.nn as nn
 
 from agents.networks import build_qnet, masked_q
 from config import (HUBER_BETA, AGENT_1, AGENT_2, EPS_END, EPS_START, GAMMA, GRAD_CLIP,
-                    LEARN_EVERY, N_ACTIONS, OBS_DIM, PER_ALPHA, PER_BETA_START,
+                    LEARN_EVERY, MUNCHAUSEN_ALPHA, MUNCHAUSEN_CLIP, N_ACTIONS,
+                    OBS_DIM, PER_ALPHA, PER_BETA_START,
                     PER_EPS, VDN_BATCH, VDN_BUFFER, VDN_EPS_DECAY_STEPS,
                     VDN_LEARN_START, VDN_LR, VDN_TARGET_UPDATE)
 
@@ -185,7 +186,8 @@ class VDNAgent:
                  learn_start: int = VDN_LEARN_START,
                  target_update: int = VDN_TARGET_UPDATE,
                  eps_end: float = EPS_END, dueling: bool = False,
-                 prioritized: bool = False, al_alpha: float = 0.0):
+                 prioritized: bool = False, al_alpha: float = 0.0,
+                 munchausen_tau: float = 0.0):
         self.device = torch.device(device)
         self.n_actions = n_actions
         torch.manual_seed(seed)
@@ -205,6 +207,9 @@ class VDNAgent:
         # ADVANTAGE LEARNING carpani (bkz. config.py AL_ALPHA_DEFAULT + learn()).
         # 0.0 = kapali, learn() eskisiyle BIREBIR AYNI.
         self.al_alpha = float(al_alpha)
+        # MUNCHAUSEN sicakligi (bkz. config.py MUNCHAUSEN_ALPHA + learn()).
+        # 0.0 = kapali. >0 ise AL'in YERINE gecer (Munchausen zaten AL'i kapsar).
+        self.munchausen_tau = float(munchausen_tau)
 
         self.online = {AGENT_1: build_qnet(n_actions, dueling=dueling).to(self.device),
                        AGENT_2: build_qnet(n_actions, dueling=dueling).to(self.device)}
@@ -300,6 +305,46 @@ class VDNAgent:
         self.buffer.push(*joint_transition)
         self.steps += 1
 
+    def _munchausen_target(self, obs1, a1, obs2, a2, r, done,
+                           next_obs1, next_obs2, nm1, nm2):
+        """Munchausen-VDN TD hedefi (bkz. config.py MUNCHAUSEN_ALPHA notu).
+
+        target = r + alpha*tau*(logpi_1(a_1) + logpi_2(a_2))_clip
+                   + gamma*(1-done)*( softV_1(s') + softV_2(s') )
+        softV_i(s') = sum_a pi_i(a) Q_tgt_i(s',a) + tau*H(pi_i)   [LEGAL a uzerinden]
+        pi_i(.|s) = softmax(Q_tgt_i(.|s)/tau)
+
+        Hepsi TARGET agdan, no_grad (cagiran zaten torch.no_grad icinde).
+        """
+        tau = self.munchausen_tau
+        alpha, clip = MUNCHAUSEN_ALPHA, MUNCHAUSEN_CLIP
+
+        # --- (1) munchausen odul artimi: alinan aksiyonun log-olasiligi.
+        # CARI maske depoda yok -> ham target Q uzerinden softmax. a_i her zaman
+        # LEGAL secildigi icin logpi_i(a_i) her zaman gecerli bir sayi; ham
+        # payda illegal aksiyonlarin exp(Q/tau)'sunu da icerir ama Q_illegal~0
+        # egitilmediginden Q_legal ayristikca ihmal edilir (clip zaten sinirlar).
+        lp1 = torch.log_softmax(self.target[AGENT_1](obs1) / tau, dim=1)
+        lp2 = torch.log_softmax(self.target[AGENT_2](obs2) / tau, dim=1)
+        m1 = lp1.gather(1, a1.unsqueeze(1)).squeeze(1).clamp(min=clip)
+        m2 = lp2.gather(1, a2.unsqueeze(1)).squeeze(1).clamp(min=clip)
+        m_bonus = alpha * tau * (m1 + m2)
+
+        # --- (2) yumusak bootstrap: politika-ortalamasi + entropi, LEGAL uzerinden.
+        def soft_v(net, next_obs, nmask):
+            qm = masked_q(net(next_obs), nmask)         # illegal -> NEG_INF
+            pi = torch.softmax(qm / tau, dim=1)          # illegal -> ~0
+            logpi = torch.log_softmax(qm / tau, dim=1)
+            legal = nmask > 0
+            qv = (pi * torch.where(legal, qm, torch.zeros_like(qm))).sum(1)
+            # entropi: -sum pi*logpi; illegal'da pi*logpi -> 0 (guard)
+            ent = -torch.where(legal, pi * logpi, torch.zeros_like(pi)).sum(1)
+            return qv + tau * ent
+
+        sv1 = soft_v(self.target[AGENT_1], next_obs1, nm1)
+        sv2 = soft_v(self.target[AGENT_2], next_obs2, nm2)
+        return r + m_bonus + GAMMA * (sv1 + sv2) * (1.0 - done)
+
     def learn(self) -> float | None:
         if len(self.buffer) < self.learn_start or self.steps % LEARN_EVERY != 0:
             return None
@@ -326,27 +371,31 @@ class VDNAgent:
         q_tot = q1 + q2                              # VDN: toplamsal ayristirma
 
         with torch.no_grad():
-            # Double DQN, HER ajan icin KENDI online/target agiyla
-            best1 = masked_q(self.online[AGENT_1](next_obs1), nm1).argmax(dim=1, keepdim=True)
-            best2 = masked_q(self.online[AGENT_2](next_obs2), nm2).argmax(dim=1, keepdim=True)
-            nq1 = self.target[AGENT_1](next_obs1).gather(1, best1).squeeze(1)
-            nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
-            target_val = r + GAMMA * (nq1 + nq2) * (1.0 - done)
+            if self.munchausen_tau > 0.0:
+                target_val = self._munchausen_target(
+                    obs1, a1, obs2, a2, r, done, next_obs1, next_obs2, nm1, nm2)
+            else:
+                # Double DQN, HER ajan icin KENDI online/target agiyla
+                best1 = masked_q(self.online[AGENT_1](next_obs1), nm1).argmax(dim=1, keepdim=True)
+                best2 = masked_q(self.online[AGENT_2](next_obs2), nm2).argmax(dim=1, keepdim=True)
+                nq1 = self.target[AGENT_1](next_obs1).gather(1, best1).squeeze(1)
+                nq2 = self.target[AGENT_2](next_obs2).gather(1, best2).squeeze(1)
+                target_val = r + GAMMA * (nq1 + nq2) * (1.0 - done)
 
-            # ADVANTAGE LEARNING (Bellemare ve ark. 2016, bkz. config.py
-            # AL_ALPHA_DEFAULT): ALINAN aksiyonun greedy'den geriligi kadar
-            # hedefi DUSER — greedy'de fark 0, non-greedy'de action-gap'i
-            # ~1/(1-alpha) katina cikarir. V(s)/Q(s,a) TARGET agdan (bootstrap
-            # ile tutarli), CARI gozlemde. Depoda cari maske YOK: NOOP her
-            # zaman legal, 4 yon sadece grid kenarinda illegal (nadir) — ham
-            # max orada V'yi hafif SISIRIR, yani AL duzeltmesi kenarda biraz
-            # fazla agresif; kabul edilir bir yanlilik.
-            if self.al_alpha > 0.0:
-                tq1c = self.target[AGENT_1](obs1)
-                tq2c = self.target[AGENT_2](obs2)
-                gap1 = tq1c.max(dim=1).values - tq1c.gather(1, a1.unsqueeze(1)).squeeze(1)
-                gap2 = tq2c.max(dim=1).values - tq2c.gather(1, a2.unsqueeze(1)).squeeze(1)
-                target_val = target_val - self.al_alpha * (gap1 + gap2)
+                # ADVANTAGE LEARNING (Bellemare ve ark. 2016, bkz. config.py
+                # AL_ALPHA_DEFAULT): ALINAN aksiyonun greedy'den geriligi kadar
+                # hedefi DUSER — greedy'de fark 0, non-greedy'de action-gap'i
+                # ~1/(1-alpha) katina cikarir. V(s)/Q(s,a) TARGET agdan (bootstrap
+                # ile tutarli), CARI gozlemde. Depoda cari maske YOK: NOOP her
+                # zaman legal, 4 yon sadece grid kenarinda illegal (nadir) — ham
+                # max orada V'yi hafif SISIRIR, yani AL duzeltmesi kenarda biraz
+                # fazla agresif; kabul edilir bir yanlilik.
+                if self.al_alpha > 0.0:
+                    tq1c = self.target[AGENT_1](obs1)
+                    tq2c = self.target[AGENT_2](obs2)
+                    gap1 = tq1c.max(dim=1).values - tq1c.gather(1, a1.unsqueeze(1)).squeeze(1)
+                    gap2 = tq2c.max(dim=1).values - tq2c.gather(1, a2.unsqueeze(1)).squeeze(1)
+                    target_val = target_val - self.al_alpha * (gap1 + gap2)
 
         if per:
             # ONCELIKLI DENEYIM TEKRARI (PER, 2026-08-26): elementwise kayip,

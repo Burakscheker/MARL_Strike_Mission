@@ -389,7 +389,33 @@ gap ~1/(1-alpha)=10x. Sicaklik yok, tek knob. n-adim (GAMMA notu) ve
 soft-target (PER notu) elenmislerinden farkli: ufka/target ritmine dokunmaz.
 Beklenti: greedy eval team_success %69 -> %75+; q_gap 0.03 -> ~0.2+.
 Once diagnostik: eval_eps.py (it2 ckpt, eps in [0,.02,.05,.1,.2], 100 harita,
-batched/CUDA) — eps>0 belirgin iyi = AL hipotezi dogru yonde.
+batched/CUDA) — eps>0 belirgin iyi = AL hipotezi dogru yonde. (Diagnostik CPU'da
+cok yavas, iptal; it2 log'undaki training-MA %68-75 [eps~0.08] vs greedy eval
+%25-67 [eps=0] farki ZATEN ayni kaniti veriyor.)
+
+### it8 NIHAI: AL action-gap'i DUZELTTI ama TAVANI GECMEDI — tepe %45 @ ep45
+| ep | eval takim% | VARIS% | olu | adim | q_gap (dense) |
+|----|-------------|--------|-----|------|---------------|
+| 15 | 20.0 | 95 | 1.60 | 1541 | — |
+| 25 | (dense MA %24) | — | — | — | **0.202** (it2: 0.033) |
+| 30 | 32.5 | 85 | 1.05 | 2247 | — |
+| 45 | **45.0** | 55 | 0.33 | 3198 | — |
+| 50 | (dense MA %48) | — | — | — | **0.361** (it2: 0.021) |
+| 60 | 32.5 | 42.5 | 0.25 | 3385 | — |
+
+**SONUC: AL MEKANIZMAYI COZDU, SORUNU COZMEDI.** q_gap it2'nin ~10-17
+katina cikti (0.02 -> 0.36), Q buyuklugu bastirildi — action-gap cokmesi
+DURDU. AMA eval tepe %45 (< it2 %69), ep45'ten sonra dusuyor. VARIS %95 ->
+%42.5 COKTU, adim 4000 tavanina dayaniyor.
+
+**TESHIS (it8'in asil degeri): tavan action-gap sorunu DEGIL.** AL greedy
+politikayi "kafasi karisik/salinan"dan "kendinden emin/asiri temkinli"ye
+cevirdi — ama politika hala hedefe varmayi birakip timeout yiyor. "Kucuk eps
+stuck'i kiriyor" gozlemi = fiziksel itme ajani karamsar deger fonksiyonunun
+gonullu gecmedigi noktadan gecirıyor, Q-karisikligi DEGIL. Sorun KARAMSARLIK/
+asiri-temkin drifti. AL kodu KALIYOR (bayrak-arkasi, zararsiz, gap probu
+icin faydali arac). Sonraki: Munchausen (AL + entropi) — entropi terimi
+politikanin rijit-temkin bir stratejiye COKMESINE direnir.
 
 
 
