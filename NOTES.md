@@ -62,13 +62,12 @@ icin episode'lar daha uzun -> ~14-20 s/ep (qmix_long500'de gorulen). "500 ep <
 2.5 saat" = <18 s/ep: VDN/MAPPO/HAPPO SIGAR, QMIX sinirinda. (Ama %75 sarti
 saglanmadigi icin DUR kosulu tetiklemedi.)
 
-**Codex donunce dongu icin hazir 3 throughput adayi**
-(scratchpad/patch_candidates.md, hicbiri UYGULANMADI — kod dokunulmadi):
-1. Eval'da risk-haritasi in-memory cache (eval map tohumlari sabit; run_chunk
-   dice+route + her eval ayni haritayi 4x kuruyor). En guvenli.
-2. StrikeMissionEnv.__init__'e defer_reset — eval/rollout'ta atilan rastgele
-   harita insasini onler.
-3. ppo rollout/eval while-loop'unda BITEN env'leri isleme sokmama (straggler).
+**Codex donunce dongu icin hazir throughput adaylari** (hicbiri UYGULANMADI —
+kod dokunulmadi; asagida "Ek: throughput aday detaylari" bolumunde tam tarif):
+- A: eval risk-haritasi in-memory cache (EN GUVENLI, ogrenmeye sifir risk)
+- B: `StrikeMissionEnv.__init__` defer_reset
+- C: ppo rollout/eval'de biten env'i islememe (straggler)
+- D: `*_EVAL_EVERY` 24/25 -> 48/50 (senin izin verdigin knob)
 
 **Repo durumu:** temiz. KOD DEGISMEDI (git diff 7f5b4d0..HEAD sadece NOTES.md).
 `python -m tests.test_env` -> TUM TESTLER GECTI (WIP baseline saglam). Orphan
@@ -185,3 +184,46 @@ tabana indirmesinden geliyordu — az kesif = az politika bozulmasi = daha
 temiz greedy snapshot. Proper eps takvimli uzun kosuda ilk ~150 ep yuksek-eps
 "kaotik olum" rejiminde ve QMIX oradan cikamadi. VDN'in belgeli tepesi ~%45
 (seed 2), ama o ESKI obs uzayiyla (N_SCALARS 18); simdiki 22-skalar obs farkli.
+
+---
+## Ek: throughput aday detaylari (codex donunce — TEK TEK, sirayla)
+
+**A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**
+`env/strike_env.py`:
+- modul seviyesi `OrderedDict _MAP_CACHE`, maxsize ~64
+- `_build_map(radars, cacheable=False)`: cacheable ise (radars, hazard_mode,
+  goal, n) anahtariyla `build_zone_map`+`build_risk_distance_map` sonucunu
+  ara/doldur
+- `reset()`: `cacheable=(map_seed is not None)` gecir
+Neden guvenli: zone/dist insa sonrasi READ-ONLY; danger her seferinde yeniden
+turetiliyor (taze array); alert taze zeros. Eval map tohumlari SABIT
+(`eval_map_seeds`) -> ilk eval'dan sonra HER eval tam isabet (dice + route +
+sonraki eval). Egitim haritalari (rastgele tohum) cache'e HIC girmez -> churn
+yok, bellek buyumez. Ogrenmeye risk: SIFIR (deterministik yeniden-hesap,
+birebir ayni array).
+Kazanc: eval basi harita-insa ~4 insa/harita -> warmup sonrasi ~0. ~40 s/eval.
+
+**B. `StrikeMissionEnv.__init__` defer_reset  [eval/rollout'taki cop insayi keser]**
+`run_chunk` / `ppo_parallel_rollout` N env kurup HEMEN `e.reset(map_seed=...)`
+cagiriyor. `__init__` su an kosulsuz `self.reset()` cagiriyor -> once RASTGELE
+bir cop harita insa ediliyor. `__init__(..., defer_reset=False)` ekle; o 3
+cagri noktasinda `True` gecir. Kazanc: eval'da -2 insa/harita (~26 s/eval),
+ppo rollout'ta -1 insa/env/chunk. Risk: dusuk ama `__init__`'e dokunuyor (o 3
+nokta kullanim oncesi reset ediyor mu -> EDIYOR, dogrulandi).
+
+**C. ppo rollout/eval while-loop'unda biten env'i islememe (straggler)**
+`done[i]` iken kod hala `e.state()`/`e.action_mask()` cagirip np.stack'e
+koyuyor, `act_batch` N'in hepsini isliyor. 1 env 4000 adima giderken 31'i
+1500'de bitmisse -> 2500 tur 32-genis is, 1 aktif env icin. Fix: state/mask/obs
+SADECE aktif idx'ler icin; act_batch alt-batch'te; sonuclari geri dagit.
+Kazanc: MAPPO/HAPPO'da buyuk (en kotu straggler). VDN/QMIX auto-reset zaten
+kaciniyor. Risk: ORTA — rollout dongusune dokunuyor, HANGI transition'larin
+kaydedildigini DEGISTIRMEMELI.
+
+**D. `*_EVAL_EVERY` 24/25 -> 48/50**  eval sayisini yariya indirir. Senin
+acikca izin verdigin knob. Belgeli dezavantaj: uzun kosuda VDN tepe-yakalama
+kacabilir. Ogrenmeye risk yok.
+
+**Kapsam disi:** `DeterministicAdaptiveAvgPool2d` (Python-dongu pooling) bir
+DOGRULUK ozelligi (CUDA determinizmi) — geri alma. 4 paralel kosu RAM tuketir
+(15.6 GB, VDN buffer ~5.4 GB) — kosular SIRAYLA olmali.
