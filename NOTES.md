@@ -73,4 +73,12 @@ Bir eval %75'i gecerse: DUR, kullaniciyi bilgilendir.
 ### Uzun kosu denemeleri (codex'siz, kod degisikligi YOK)
 | kosu | s/ep | en iyi eval team% | not |
 |------|------|-------------------|-----|
-| qmix_long500 (ep, eval-every 50) | ... | ... | ... |
+| qmix_long500 s0 | ~13 | ep50 %5 -> ep100 %2.5 -> ep150 %0 | COKTU. ep150'de oldurdum. Belgeli QMIX uzun-egitim cokusu. it1'deki %37.5 SADECE 48-ep sikistirilmis eps takviminin dusuk-kesif anlik goruntusuydu, kalici degil. |
+| vdn_long300 s2 | ... | ... | seed 2 (belgeli BEST_vdn_seed2_team45 tohumu), eval-every 25, tepe yakalama |
+
+### Onemli gozlem
+it1'in yuksek sayilari (QMIX %37.5, VDN %25) 48-ep kosunun eps'i ep24'te
+tabana indirmesinden geliyordu — az kesif = az politika bozulmasi = daha
+temiz greedy snapshot. Proper eps takvimli uzun kosuda ilk ~150 ep yuksek-eps
+"kaotik olum" rejiminde ve QMIX oradan cikamadi. VDN'in belgeli tepesi ~%45
+(seed 2), ama o ESKI obs uzayiyla (N_SCALARS 18); simdiki 22-skalar obs farkli.
