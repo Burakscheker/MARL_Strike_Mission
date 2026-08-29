@@ -342,10 +342,19 @@ basi `set_entropy_progress` anneal. test_env GECTI.
 | algo  | eval team% trajektori | en iyi mission_prob | it1 (sabit 0.01) |
 |-------|-----------------------|--------------------|-------------------|
 | mappo | 32:5 / 64:0 / 96:10 / 128:10 / 160:7.5 | **0.135** (ep96) | 0.070 |
-| happo | ... | ... | 0.056 |
-=> ~2x ama ~%10'da takili. ep160'ta VARIS %35'e dustu (VDN'deki asiri-temkin
-drift). Entropi curriculum YARDIMCI ama yetmiyor. Degisiklik KALIYOR (euzxx
+| happo | ep32 %2.5 (kesildi, RAM) | ~0.050 | 0.056 |
+=> MAPPO ~2x (mp 0.07->0.135) ama ~%10'da takili; HAPPO marjinal. ep160'ta
+VARIS %35 (VDN'deki asiri-temkin drift). Entropi curriculum YARDIMCI ama
+yetmiyor — MAPPO/HAPPO'nun daha derin sorunu var. Degisiklik KALIYOR (euzxx
 tasarimi, 2x, zararsiz). GERI ALINABILIR: config'te ikisini de 0.01 yap.
+
+### it6 (opt 3): shaping HAM Manhattan (euzxx, risk-farkindan ayri) — KOD DEGISIKLIGI
+`env/strike_env._phi`: risk-farkinda `self.dist` -> ham Manhattan. Gozlem
+skalari #11 degismedi. test_env GECTI. Kritik test: VDN fast-eps (%69 recipe)
++ bu shaping. Beklenti: Phi hedefe MONOTON -> "takilma" azalir (§11.12),
+%69 -> ?
+| ep | eval team% | not |
+|----|-----------|-----|
 
 
 
