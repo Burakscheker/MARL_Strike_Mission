@@ -186,7 +186,25 @@ temiz greedy snapshot. Proper eps takvimli uzun kosuda ilk ~150 ep yuksek-eps
 (seed 2), ama o ESKI obs uzayiyla (N_SCALARS 18); simdiki 22-skalar obs farkli.
 
 ---
-## Ek: throughput aday detaylari (codex donunce — TEK TEK, sirayla)
+## it2 — codex YOK, self-review (Burak: "codexi denklemden cikar, kendin review at, 75 olcak")
+Baslangic durumu (o ana kadar): en iyi it1_qmix %33 (100-harita), it1_vdn %27.
+s/ep: VDN 10.95 QMIX 13.34 MAPPO 10.24 HAPPO 10.61.
+
+**Self-review — #1 bulgu:** greedy politika COKUSU her seyi tikayan sorun.
+Desen: eps ~ep50-150 arasi 0.4-0.8 iken buffer RASTGELE-aksiyon-olumleriyle
+doluyor -> deger fonksiyonu "her sey tehlikeli" ogreniyor -> politika donuyor
+(VARIS %100->%0). it1 48-ep kosulari bundan KACINIYOR cunku eps ep24'te
+0.05'e iniyor -> buffer ON-POLICY kaliyor -> deger fonksiyonu ise yarar sey
+ogreniyor. Belgeli %46 (ESKI obs, 500-ep) COKMEMISTI — yani cokus mevcut
+config'e (22-skalar obs / 4000 adim / MAPPO-HAPPO ortak-kod portu) ozgu.
+
+**it2 degisikligi (KOD DEGISIKLIGI YOK, sadece CLI):** `--eps-start 0.1` ile
+egitim boyunca eps'i ~0.10->0.05 tut (it1'in hizli-decay davranisini uzun
+kosuda taklit et). Beklenti: greedy politika 250 ep boyunca duzenli tirmanir
+ve COKMEZ; team_success it1'in %33'unu gecer. Test: VDN 250-ep seed 0.
+Geri alinabilir (bayrak kaldirilir).
+
+
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**
 `env/strike_env.py`:
