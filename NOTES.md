@@ -3,6 +3,55 @@
 Amac: happo / mappo / qmix / vdn egit; herhangi birinin eval team_success'i
 %75'i gecerse DUR. Ikincil: 500 episode < 2.5 saat.
 
+---
+## >>> SABAH OZETI (Burak, once bunu oku) <<<
+
+**Dongu 1. iterasyonda tikandi: `codex` kullanim limitinde (26 gun reset, Sep 24).**
+Senin tarif ettigin dongunun 4-5. adimlari (codex analiz -> onerisini uygula)
+codex olmadan yapilamaz. "Komut hata verirse donguyu surdurme" kuralin geregi
+throughput KOD degisikligi yapmadim. Bunun yerine bosta GPU'yu ASIL hedefe
+(%75 team_success) yonlendirdim: kod degisikligi YOK, sadece egitim kosulari.
+
+**%75'e ulasilamadi. Ulasilamaz da — mevcut kurulumla.** Kanit:
+- QMIX 500-ep: ep50 %5 -> ep100 %2.5 -> ep150 %0. Coktu.
+- VDN 300-ep (seed 2): ep25 %5 -> ep75..150 %0. Ayni cokus, eps tabana inince toparlamadi.
+- Tohum taramasi (48-ep): QMIX s0=%37.5(sans) s1=%7.5 s3=%2.5 ; VDN s0=%25 ...
+- MAPPO/HAPPO: %5-7.5, koordinasyon yok (route_overlap 1.0).
+
+**Cokus mekanizmasi** (yeni gozlem, degerli): ~ep50-150 arasi anlamli epsilon'la
+egitim politikayi "urkek"lestiriyor — o kadar risk-kacinan hale geliyor ki
+HEDEFE GITMEYI birakiyor (VARIS %100 -> %0, her episode timeout, analitik
+"guvenlik" 0.85 ama gorev 0.0). config.py R_RISK_COEF=65 notundaki tam olarak
+uyarilan mod. it1'in yuksek sayilari (QMIX %37.5) SADECE 48-ep kosunun eps'i
+ep24'te tabana indirip politikayi cokusten ONCE greedy'ye dondurmesindendi —
+tohuma da bagli, kalici degil.
+
+**En iyi kullanabilir checkpoint'ler** (bu gece uretildi):
+- `runs/ckpt/it1_qmix.pt` — QMIX seed 0, mission_prob 0.408, eval team %37.5 @ ep48
+- `runs/ckpt/it1_vdn.pt`  — VDN seed 0, eval team %25 @ ep24
+Tarihi en iyi hala `runs/ckpt/BEST_vdn_seed2_team45.pt` (%45) ama o ESKI 18-skalar
+obs uzayiyla; simdiki 22-skalar (eylem-ozgu risk) obs ile o sonuc tekrarlanmadi.
+
+**s/ep olcumleri** (it1 probe, 48-ep, n_envs 32, cuda, solo): VDN 10.95, QMIX
+13.34, MAPPO 10.24, HAPPO 10.61. Gercek 500-ep kosu eps takvimi daha uzun oldugu
+icin episode'lar daha uzun -> ~14-20 s/ep (qmix_long500'de gorulen). "500 ep <
+2.5 saat" = <18 s/ep: VDN/MAPPO/HAPPO SIGAR, QMIX sinirinda. (Ama %75 sarti
+saglanmadigi icin DUR kosulu tetiklemedi.)
+
+**Codex donunce dongu icin hazir 3 throughput adayi**
+(scratchpad/patch_candidates.md, hicbiri UYGULANMADI — kod dokunulmadi):
+1. Eval'da risk-haritasi in-memory cache (eval map tohumlari sabit; run_chunk
+   dice+route + her eval ayni haritayi 4x kuruyor). En guvenli.
+2. StrikeMissionEnv.__init__'e defer_reset — eval/rollout'ta atilan rastgele
+   harita insasini onler.
+3. ppo rollout/eval while-loop'unda BITEN env'leri isleme sokmama (straggler).
+
+**Repo durumu:** temiz. 3 commit atildi (7f5b4d0 WIP checkpoint, 57169bd it1
+baseline+codex engeli, 612e428 uzun kosu cokusu). KOD DEGISMEDI, sadece
+NOTES.md + yeni runs/ loglari. Orphan surec yok.
+
+---
+
 ## Dokunulmaz (kullanici kurali)
 - `eval/evaluate.py` — hic dokunma
 - `team_success` hesabi (`env/strike_env._terminal_info`: `reached1 or reached2`) — dokunma
@@ -74,7 +123,18 @@ Bir eval %75'i gecerse: DUR, kullaniciyi bilgilendir.
 | kosu | s/ep | en iyi eval team% | not |
 |------|------|-------------------|-----|
 | qmix_long500 s0 | ~13 | ep50 %5 -> ep100 %2.5 -> ep150 %0 | COKTU. ep150'de oldurdum. Belgeli QMIX uzun-egitim cokusu. it1'deki %37.5 SADECE 48-ep sikistirilmis eps takviminin dusuk-kesif anlik goruntusuydu, kalici degil. |
-| vdn_long300 s2 | ... | ... | seed 2 (belgeli BEST_vdn_seed2_team45 tohumu), eval-every 25, tepe yakalama |
+| vdn_long300 s2 | ~11 | ep25 %5 -> ep50 %2.5 -> ep75..150 %0 | QMIX ILE AYNI COKUS. eps ep150'de tabana indi, GREEDY politika toparlamadi (VARIS %0, timeout, "urkek" politika: analitik 0.82 ama hedefe varmiyor). ep150'de oldurdum. |
+
+### it2-esdegeri: kisa-kosu tohum taramasi (48 ep, eval-every 12, kod degisikligi YOK)
+Hipotez: kisa kosu eps'i ep24'te tabana indirir -> politika "urkek cokus"ten
+ONCE greedy'ye zorlanir -> temiz snapshot. Farkli tohum daha yuksek tepe verebilir.
+| kosu | en iyi eval team% (hangi ep) | not |
+|------|------------------------------|-----|
+| sw_qmix_s1 | ep36 %7.5 (0/5/7.5/5) | VARIS max %25. |
+| sw_qmix_s3 | ep36 %2.5 (.../2.5/0) | ep48 tam cokus. |
+| sw_vdn_s1  | ... | |
+| sw_vdn_s3  | ... | |
+QMIX tohumlari: s0 %37.5 (SANS), s1 %7.5, s3 %2.5 -> yuksek varyans, cogunlukla cokus.
 
 ### Onemli gozlem
 it1'in yuksek sayilari (QMIX %37.5, VDN %25) 48-ep kosunun eps'i ep24'te
