@@ -329,6 +329,24 @@ loglar runs/'da.
 NOT (altyapi dersi): looping bash script TaskStop'a dayanikli degil (loop
 devam edip yeni kosu baslatiyor). Tek-kosu script + oto-kill kullan.
 
+---
+## it5-it6: euzxx parent tasarimindan RL fikirleri (Burak: "1 sonra 3, sirayla")
+euzxx/MARL-pathtfinding Strike_Mission.md (parent) farklari: entropy curriculum
+0.03->0.005 (Burak sabit 0.01), ham-Manhattan shaping (Burak risk-farkinda
+potansiyel), gamma 0.99 (Burak 0.9998), +200/-100 (Burak +50/-15). Burak'in
+kendi §11.12'si zaten "sorun odulde degil ogrenmede/kredi atamasi" demis.
+
+### it5 (opt 1): MAPPO/HAPPO entropi curriculum 0.03->0.005 — KOD DEGISIKLIGI
+`PPO_ENTROPY_COEF 0.01` -> `PPO_ENTROPY_START 0.03 / END 0.005`, train.py ep
+basi `set_entropy_progress` anneal. test_env GECTI.
+| algo  | eval team% trajektori | en iyi mission_prob | it1 (sabit 0.01) |
+|-------|-----------------------|--------------------|-------------------|
+| mappo | 32:5 / 64:0 / 96:10 / 128:10 / 160:7.5 | **0.135** (ep96) | 0.070 |
+| happo | ... | ... | 0.056 |
+=> ~2x ama ~%10'da takili. ep160'ta VARIS %35'e dustu (VDN'deki asiri-temkin
+drift). Entropi curriculum YARDIMCI ama yetmiyor. Degisiklik KALIYOR (euzxx
+tasarimi, 2x, zararsiz). GERI ALINABILIR: config'te ikisini de 0.01 yap.
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**
