@@ -241,6 +241,18 @@ olabilir, %69 tek tohum), (b) ince eval grid (eval-every 6, ep15-40 arasi
 gercek tepeyi yakala — ep25 ille de tepe degil), (c) drift'i yavaslatmak
 (--eps-end 0.1 sabit-dusuk?).
 
+### it2 push: sweep2 (VDN fast-eps, s0-s3, 48ep, eval-every 8) — 13:39 basladi
+Amac: %69'u gecen (tohum, checkpoint) bul. En iyi mission_prob checkpoint
+otomatik kaydediliyor (it2_vdn_ef_s{0,1,2,3}.pt). Sonra en iyi 1-2'yi
+100-harita authoritative eval et.
+| seed | en iyi eval team% (ep) | 100-harita | not |
+|------|------------------------|------------|-----|
+| 0 (it2 orijinal) | ep25 %67.5 | **%69.0** | referans |
+| 0 (ince grid) | ... | ... | |
+| 1 | ... | ... | |
+| 2 | ... | ... | |
+| 3 | ... | ... | |
+
 
 
 **A. Eval haritalarinin bellek-ici cache'i  [EN GUVENLI, self-contained]**
