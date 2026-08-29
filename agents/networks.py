@@ -100,26 +100,13 @@ class CNNQNet(nn.Module):
     def __init__(self, channels: int, grid_n: int, n_scalars: int, n_actions: int,
                  conv_channels: tuple[int, ...] = (16, 32, 32),
                  pool_size: int = 6, hidden: int = HIDDEN,
-                 scalar_embed: int = SCALAR_EMBED, dueling: bool = False,
-                 layernorm: bool = False, n_quantiles: int = 1):
+                 scalar_embed: int = SCALAR_EMBED, dueling: bool = False):
         super().__init__()
         self.channels = channels
         self.grid_n = grid_n
         self.n_scalars = n_scalars
         self.spatial_size = channels * grid_n * grid_n
         self.dueling = dueling
-        # QR-DQN (Dabney ve ark. 2017, 2026-08-29): n_quantiles>1 ise ag
-        # her aksiyon icin Q SKALARI yerine getiri dagiliminin N KUANTILINI
-        # dondurur. forward() cikisi (B, A, N). n_quantiles=1 -> (B, A),
-        # ESKI mimariyle BIREBIR AYNI (final Linear out_features degismez,
-        # state_dict head.4 ayni sekil). Motivasyon: deger fonksiyonu
-        # stokastik olum cezasi altinda KARAMSAR mean'e cokuyor (it7-it15
-        # pattern) — tum dagilimi ogrenmek daha zengin sinyal, mean cokmesine
-        # daha dayanikli, ustelik risk-farkinda aksiyon secimi (yuksek
-        # kuantil = iyimser) mumkun.
-        self.n_quantiles = n_quantiles
-        self.n_actions = n_actions
-        head_out = n_actions * n_quantiles
 
         layers = []
         in_c = channels
@@ -135,31 +122,14 @@ class CNNQNet(nn.Module):
             nn.Linear(scalar_embed, scalar_embed), nn.ReLU(),
         )
 
-        # LAYERNORM (2026-08-29, saf RL denemesi — AL/Munchausen elendikten
-        # sonra). Motivasyon: config.py §11.14 belgeli Q-IRAKSAMASI (q_mean
-        # 17->37 uzun egitimde, hic duzlesmiyor) — sustained TD guncellemesi
-        # Q'yu buyutuyor, argmax politikasi bozuluyor (fast-eps bunu ~ep25'te
-        # yakalayip DURUYOR, cozmuyor). Her gizli katman sonrasi (Linear'dan
-        # SONRA, ReLU'dan ONCE) LayerNorm aktivasyon dagilimini sabit tutar
-        # -> son Linear'in girdisi sinirli -> Q buyumesi yavaslar/durur
-        # (BroNet, Nauman ve ark. 2024; CrossQ; plasticity-loss literaturu).
-        # layernorm=False (varsayilan) -> ESKI mimariyle BIREBIR AYNI
-        # (state_dict anahtarlari head.0/2/4 degismez). Checkpoint uyumsuz
-        # oldugu icin --layernorm ile SIFIRDAN egitim gerekir (fast-eps zaten
-        # sifirdan).
-        self.layernorm = layernorm
-
-        def _ln(n):
-            return [nn.LayerNorm(n)] if layernorm else []
-
         flat_dim = in_c * pool_size * pool_size
         in_head = flat_dim + scalar_embed + n_scalars
         if not dueling:
             self.head = nn.Sequential(
                 # + n_scalars: ham skalar skip baglantisi (dx/dy -> Q dogrudan yol)
-                nn.Linear(in_head, hidden), *_ln(hidden), nn.ReLU(),
-                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(),
-                nn.Linear(hidden, head_out),
+                nn.Linear(in_head, hidden), nn.ReLU(),
+                nn.Linear(hidden, hidden), nn.ReLU(),
+                nn.Linear(hidden, n_actions),
             )
         else:
             # DUELING (Wang ve ark. 2016, 2026-08-26 dis inceleme onerisi):
@@ -173,11 +143,11 @@ class CNNQNet(nn.Module):
             # dallara boler; Q(s,a)=V(s)+(A(s,a)-mean_a A(s,a)) — olcek (V)
             # ve siralama (A) MIMARI OLARAK ayristigi icin TD guncellemesi
             # V'yi degistirirken A'nin OGRENDIGI SIRALAMAYI ezmesi zorlasir.
-            self.trunk = nn.Sequential(nn.Linear(in_head, hidden), *_ln(hidden), nn.ReLU())
+            self.trunk = nn.Sequential(nn.Linear(in_head, hidden), nn.ReLU())
             self.value_head = nn.Sequential(
-                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, n_quantiles))
+                nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, 1))
             self.adv_head = nn.Sequential(
-                nn.Linear(hidden, hidden), *_ln(hidden), nn.ReLU(), nn.Linear(hidden, head_out))
+                nn.Linear(hidden, hidden), nn.ReLU(), nn.Linear(hidden, n_actions))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         spatial = x[:, :self.spatial_size].view(-1, self.channels, self.grid_n, self.grid_n)
@@ -185,34 +155,27 @@ class CNNQNet(nn.Module):
         h = self.conv(spatial)
         h = self.pool(h).flatten(1)
         h = torch.cat([h, self.scalar_enc(scalars), scalars], dim=1)
-        nq = self.n_quantiles
         if not self.dueling:
-            out = self.head(h)
-            return out if nq == 1 else out.view(-1, self.n_actions, nq)
+            return self.head(h)
         h = self.trunk(h)
-        if nq == 1:
-            v = self.value_head(h)                       # (B, 1)
-            a = self.adv_head(h)                         # (B, A)
-            return v + (a - a.mean(dim=1, keepdim=True))
-        v = self.value_head(h).view(-1, 1, nq)           # (B, 1, N)
-        a = self.adv_head(h).view(-1, self.n_actions, nq)  # (B, A, N)
-        return v + (a - a.mean(dim=1, keepdim=True))     # (B, A, N)
+        v = self.value_head(h)
+        a = self.adv_head(h)
+        return v + (a - a.mean(dim=1, keepdim=True))
 
 
-def build_qnet(n_actions: int = N_ACTIONS, dueling: bool = False,
-               layernorm: bool = False, n_quantiles: int = 1) -> nn.Module:
+def build_qnet(n_actions: int = N_ACTIONS, dueling: bool = False) -> nn.Module:
     """Butun ajanlarin (DQN/IQL/VDN/QMIX) kullandigi TEK fabrika.
 
     grid_n=PATCH_SIZE (GRID_N DEGIL): env.observe() artik tam gridi degil
     ajanin YEREL penceresini donduruyor (bkz. config.py OBS_CHANNELS notu),
     ag da o pencere boyutuna gore sekilleniyor.
 
-    dueling=False + layernorm=False (varsayilan): ESKI mimariyle BIREBIR ayni
-    (parametre isimleri dahil) — mevcut checkpoint'ler etkilenmez.
+    dueling=False (varsayilan): ESKI mimariyle BIREBIR ayni (parametre
+    isimleri dahil) — mevcut checkpoint'ler etkilenmez.
     """
     return CNNQNet(OBS_CHANNELS, PATCH_SIZE, N_SCALARS, n_actions,
                    conv_channels=CNN_CHANNELS, pool_size=CNN_POOL_SIZE,
-                   dueling=dueling, layernorm=layernorm, n_quantiles=n_quantiles)
+                   dueling=dueling)
 
 
 NEG_INF = -1e9      # -inf yerine: maskeli softmax/max'ta NaN uretmez
@@ -223,10 +186,5 @@ def masked_q(q: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
     Gercek -inf kullanmiyoruz: terminal gecislerde tum aksiyonlar maskeliyse
     -inf * 0 = NaN cikar ve gradyan sessizce bozulur.
-
-    q 2B (B, A) veya QR-DQN'de 3B (B, A, N_quantile) olabilir — 3B'de maske
-    aksiyon ekseninde (dim 1) uygulanir, kuantil eksenine yayilir.
     """
-    if q.dim() == 3:
-        return q.masked_fill((mask <= 0).unsqueeze(-1), NEG_INF)
     return q.masked_fill(mask <= 0, NEG_INF)

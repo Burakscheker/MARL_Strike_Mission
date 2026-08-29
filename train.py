@@ -57,21 +57,12 @@ RUNNER = {"mappo": play_episode_ppo, "happo": play_episode_ppo,
 
 def build_agent(algo: str, seed: int, device: str, lr: float = None,
                 eps_end: float = None, dueling: bool = False,
-                prioritized: bool = False, al_alpha: float = 0.0,
-                munchausen_tau: float = 0.0, layernorm: bool = False,
-                vdn_batch: int = None, vdn_target_update: int = None,
-                n_quantiles: int = 1, qr_optimism: float = 0.0):
+                prioritized: bool = False):
     if algo == "vdn":
         return VDNAgent(seed=seed, device=device,
                          lr=lr if lr is not None else C.VDN_LR,
                          eps_end=eps_end if eps_end is not None else C.EPS_END,
-                         dueling=dueling, prioritized=prioritized,
-                         al_alpha=al_alpha, munchausen_tau=munchausen_tau,
-                         layernorm=layernorm,
-                         batch_size=vdn_batch if vdn_batch is not None else C.VDN_BATCH,
-                         target_update=(vdn_target_update if vdn_target_update
-                                        is not None else C.VDN_TARGET_UPDATE),
-                         n_quantiles=n_quantiles, qr_optimism=qr_optimism)
+                         dueling=dueling, prioritized=prioritized)
     if algo == "qmix":
         return QMixAgent(seed=seed, device=device,
                           lr=lr if lr is not None else C.QMIX_LR)
@@ -500,14 +491,6 @@ def main():
     ap.add_argument("--algo", choices=["mappo", "happo", "vdn", "qmix"], required=True)
     ap.add_argument("--episodes", type=int, default=None)
     ap.add_argument("--seed", type=int, default=C.SEED)
-    ap.add_argument("--map-seed", type=int, default=None,
-                    help="EGITIM harita dizisini --seed'den AYIR (varsayilan: "
-                         "--seed ile ayni). --seed hala ag-init + kesif RNG'sini "
-                         "kontrol eder; --map-seed sadece VecStrikeEnv'in urettigi "
-                         "egitim haritalari dizisini. TESHIS: fast-eps seed 0 vs "
-                         "seed 1 arasi ~40 puanlik farkin ag-init sansindan mi "
-                         "yoksa harita-dizisi (curriculum) sansindan mi geldigini "
-                         "ayirir. Eval haritalari SABIT (eval_map_seeds), etkilenmez.")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--eval-every", type=int, default=None)
@@ -544,13 +527,6 @@ def main():
     ap.add_argument("--n-radar", type=int, default=None,
                     help="radar sayisini SABITLE (curriculum'u kapatir). "
                          "Verilmezse 10->40 rampasi kullanilir.")
-    ap.add_argument("--curriculum-frac", type=float, default=None,
-                    help="C.CURRICULUM_FRAC override (varsayilan 0.6 = egitimin "
-                         "%%60'inda 25 radara ulasir). TESHIS: fast-eps ckpt'i "
-                         "~ep25'te seciliyor ama curriculum orada daha ~12 "
-                         "radarda — ckpt KOLAY haritalarda egitilip 25-radar "
-                         "(zor) eval'da olculuyor. 0.1 -> ep25'te 25 radara "
-                         "ulasir (train/eval zorlugu eslesir).")
     ap.add_argument("--lr", type=float, default=None,
                     help="optimizer LR'ini gecici override et (varsayilan config'teki "
                          "*_LR). BC-checkpoint'ten RL fine-tune ederken onemli: BC, "
@@ -583,58 +559,6 @@ def main():
                          "(olum, varis, riskli giris) TD-hatasi buyuklugune "
                          "gore daha sik ornekler. Varsayilan KAPALI (uniform "
                          "ornekleme, eski davranis).")
-    ap.add_argument("--al-alpha", type=float, default=None,
-                    help="SADECE vdn: Advantage Learning operatoru (Bellemare "
-                         "ve ark. 2016, 'Increasing the Action Gap'). TD "
-                         "hedefinden alinan aksiyonun greedy'den geriligini "
-                         "alpha kadar duser -> action-gap ~1/(1-alpha) katina "
-                         "cikar, greedy politika korunur. Sicaklik YOK. "
-                         "Varsayilan KAPALI (0.0); tipik deger 0.9. Bkz. "
-                         "config.py AL_ALPHA_DEFAULT.")
-    ap.add_argument("--munchausen-tau", type=float, default=None,
-                    help="SADECE vdn: Munchausen RL (Vieillard ve ark. 2020). "
-                         "Odule alpha*tau*log pi(a_t) ekler + sert max yerine "
-                         "yumusak (entropi-duzenli) bootstrap. AL'i KAPSAR + "
-                         "entropi terimi politikanin rijit bir stratejiye "
-                         "cokmesine direnir. Varsayilan KAPALI (0.0); tipik "
-                         "0.03. >0 ise --al-alpha yok sayilir. Bkz. config.py "
-                         "MUNCHAUSEN_ALPHA.")
-    ap.add_argument("--vdn-batch", type=int, default=None,
-                    help="SADECE vdn: replay batch boyutu override (varsayilan "
-                         "C.VDN_BATCH=128). 32->128 kaotik ziplama/cokusu "
-                         "azaltmisti (config.py notu); 256 DENENMEDI — gradyan "
-                         "varyansini yariya indirir, 250-ep fast-eps'in tohum "
-                         "lotaryasini (seed 0 iyi, seed 1 %%27) yumusatabilir.")
-    ap.add_argument("--vdn-target-update", type=int, default=None,
-                    help="SADECE vdn: hard target sync araligi (adim) override "
-                         "(varsayilan C.VDN_TARGET_UPDATE=4000). YAVAS yon "
-                         "DENENMEDI (soft/Polyak denenip elenmisti) — daha "
-                         "kararli regresyon hedefi = daha az kaotik ogrenme.")
-    ap.add_argument("--quantiles", type=int, default=None,
-                    help="SADECE vdn: QR-DQN (Dabney ve ark. 2017) — Q skalari "
-                         "yerine getiri dagiliminin N kuantilini ogrenir. "
-                         "Varsayilan 1 (skaler, eski davranis BIREBIR). Tipik "
-                         "8-32. Motiv: deger fonksiyonu stokastik olum cezasi "
-                         "altinda karamsar mean'e cokuyor; tum dagilim daha "
-                         "dayanikli + iyimser aksiyon secimi mumkun (--qr-optimism). "
-                         ">1 ise --al-alpha / --munchausen-tau YOK SAYILIR.")
-    ap.add_argument("--qr-optimism", type=float, default=None,
-                    help="SADECE vdn + --quantiles>1: aksiyon secerken mean "
-                         "yerine mean + k*std kullan (getiri dagiliminin ust ucu "
-                         "= iyimser -> karamsar cokmeye karsi). 0.0 = risk-notr "
-                         "(duz mean). Tipik 0.3-1.0. Egitim ve eval'de kullanilir.")
-    ap.add_argument("--save-all-ckpts", action="store_true",
-                    help="Her eval'da ayri checkpoint kaydet ({tag}_ep{N}.pt) — "
-                         "deploy-time Q-ortalama ensemble icin (fast-eps'te her "
-                         "ckpt ~%%65 ama farkli haritalarda hata yapar).")
-    ap.add_argument("--layernorm", action="store_true",
-                    help="SADECE vdn: Q-agi gizli katmanlarindan sonra LayerNorm "
-                         "(BroNet/CrossQ, plasticity-loss literaturu). Belgeli "
-                         "Q-iraksamasini (q_mean 17->37, config.py §11.14) "
-                         "hedefler: aktivasyon dagilimini sabit tutar -> Q "
-                         "sinirli kalir -> uzun egitimde argmax politikasi "
-                         "bozulmaz. Varsayilan KAPALI; acilirsa ESKI "
-                         "checkpoint'ler YUKLENEMEZ, sifirdan egitim gerekir.")
     ap.add_argument("--resume-head-reset", action="store_true",
                     help="govdeyi yukle ama Q ciktisi katmanini sifirla "
                          "(gamma/olcek degistigi icin onerilir — bkz. agents/transfer.py)")
@@ -663,38 +587,19 @@ def main():
     episodes = args.episodes or getattr(C, f"{algo.upper()}_EPISODES")
     eval_every = args.eval_every or getattr(C, f"{algo.upper()}_EVAL_EVERY")
     tag = args.tag or f"{algo}_s{args.seed}"
-    map_seed = args.map_seed if args.map_seed is not None else args.seed
-    if args.curriculum_frac is not None:
-        C.CURRICULUM_FRAC = args.curriculum_frac   # curriculum_n_radar cagri aninda re-read eder
-        print(f"curriculum-frac override: {args.curriculum_frac} "
-              f"(25 radara ~ep{int(args.curriculum_frac * episodes)}'te ulasir)")
     os.makedirs(os.path.join(C.RUNS_DIR, "ckpt"), exist_ok=True)
 
     print(C.summary())
     print(f"\nalgo={algo}  episodes={episodes}  seed={args.seed}  tag={tag}")
-    if map_seed != args.seed:
-        print(f"harita-tohumu AYRI: map_seed={map_seed} (ag-init/kesif seed={args.seed})")
     print(f"alarm kuplaji={'ACIK' if args.alert else 'kapali'}  "
           f"risk-shaping={'kapali' if args.no_risk_shaping else 'acik'}\n")
 
-    env = StrikeMissionEnv(max_steps=args.max_steps, seed=map_seed,
+    env = StrikeMissionEnv(max_steps=args.max_steps, seed=args.seed,
                            alert_enabled=args.alert,
                            risk_shaping=not args.no_risk_shaping)
-    al_alpha = args.al_alpha if args.al_alpha is not None else 0.0
-    munchausen_tau = args.munchausen_tau if args.munchausen_tau is not None else 0.0
-    n_quantiles = args.quantiles if args.quantiles is not None else 1
-    qr_optimism = args.qr_optimism if args.qr_optimism is not None else 0.0
-    if n_quantiles > 1:
-        al_alpha = 0.0; munchausen_tau = 0.0   # QR-DQN bu ikisiyle birlesmez
-    elif munchausen_tau > 0.0:
-        al_alpha = 0.0   # Munchausen AL'i kapsar; ikisi birden anlamsiz
     agent = build_agent(algo, args.seed, args.device, lr=args.lr,
                         eps_end=args.eps_end, dueling=args.dueling,
-                        prioritized=args.prioritized, al_alpha=al_alpha,
-                        munchausen_tau=munchausen_tau, layernorm=args.layernorm,
-                        vdn_batch=args.vdn_batch,
-                        vdn_target_update=args.vdn_target_update,
-                        n_quantiles=n_quantiles, qr_optimism=qr_optimism)
+                        prioritized=args.prioritized)
 
     if args.resume_from:
         src = (transfer.resolve_source(algo) if args.resume_from == "pathfinding"
@@ -752,8 +657,7 @@ def main():
         def q_stats():
             net = agent.online[C.AGENT_1]
             with _torch.no_grad():
-                out = net(PROBE)
-                q = (out.mean(-1) if out.dim() == 3 else out)[:, :4]  # QR: kuantil ort.
+                q = net(PROBE)[:, :4]
             t2 = q.topk(2, dim=1).values
             return float(q.mean()), float((t2[:, 0] - t2[:, 1]).mean())
     # EPISODE BASINA ham kayit — grafikte hem ham nokta hem hareketli ortalama
@@ -779,7 +683,7 @@ def main():
         # dosya stringi, GAE episode sinirlarini net bilmek zorunda.
         fn = {"vdn": vdn_parallel_rollout, "qmix": qmix_parallel_rollout,
              "mappo": ppo_parallel_rollout, "happo": ppo_parallel_rollout}[algo]
-        roll = fn(agent, args.n_envs, args.max_steps, map_seed, episodes,
+        roll = fn(agent, args.n_envs, args.max_steps, args.seed, episodes,
                   args.n_radar, not args.no_risk_shaping, args.alert)
     else:
         roll = None
@@ -814,19 +718,6 @@ def main():
               + (", dueling mimari" if args.dueling else ""))
     elif algo == "vdn" and args.dueling:
         print("dueling mimari acik (PER kapali)")
-    if algo == "vdn" and al_alpha > 0.0:
-        print(f"Advantage Learning acik: alpha={al_alpha} "
-              f"(action-gap ~{1.0/(1.0-al_alpha):.1f}x hedeflenir)")
-    if algo == "vdn" and munchausen_tau > 0.0:
-        print(f"Munchausen RL acik: tau={munchausen_tau}, alpha={C.MUNCHAUSEN_ALPHA}, "
-              f"clip={C.MUNCHAUSEN_CLIP} (AL'i kapsar + entropi bootstrap)")
-    if algo == "vdn" and args.layernorm:
-        print("LayerNorm acik: Q-agi gizli katmanlari normalize (Q-iraksama karsiti)")
-    if algo == "vdn" and (args.vdn_batch or args.vdn_target_update):
-        print(f"VDN override: batch={agent.batch_size}  target_update={agent.target_update}")
-    if algo == "vdn" and n_quantiles > 1:
-        print(f"QR-DQN acik: {n_quantiles} kuantil, optimism={qr_optimism} "
-              f"(getiri dagilimi ogrenilir; iyimser aksiyon secimi)")
 
     t_start = time.perf_counter()
     best = -1.0   # mission_prob
@@ -934,12 +825,6 @@ def main():
                 best = score
                 save(agent, algo, stem)
             save(agent, algo, stem + "_last")
-            # --save-all-ckpts: HER eval'da ayri kaydet (deploy-time ensemble
-            # icin). fast-eps rejiminde her ckpt ~%60-68 ama FARKLI haritalarda
-            # hata yapiyor -> Q-ortalama ensemble varyansi azaltir (post-hoc,
-            # egitim dengesini bozamaz).
-            if args.save_all_ckpts:
-                save(agent, algo, f"{stem}_ep{ep}")
 
     log_f.close()
     dense_f.close()
