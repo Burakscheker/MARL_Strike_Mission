@@ -311,15 +311,12 @@ R_RISK_COEF = 65.0
 # Egitim sonrasi ayni script ile (once/sonra) kacinilabilir-giris orani
 # olculup DOGRULANMALI.
 #
-# 20.0 -> 0.0 (2026-08-29, gece throughput/skor dongusu, it3): fast-eps
-# (--eps-start 0.1) kurulumuyla ajanin sorunu ARTIK "gereksiz risk alma"
-# DEGIL, TERSI — asiri temkin (olu 0.39/ep ama timeout %35, rota meandering,
-# team %69'da takili). Bu ek +20 ceza ring girisini daha da caydiriyor,
-# yani su anki basarisizlik moduyla TERS yonde itiyor. Hafiza notu zaten
-# "net iyilesme SAGLAMADI ... istenirse kaldirilabilir" diyordu. 0.0'a
-# cekildi; it3 testinde peak eval %69'u geciyor mu diye olculecek.
-# GERI ALINABILIR: sadece bu satiri 20.0'a dondur.
-R_UNNECESSARY_RISK = 0.0
+# it3 (2026-08-29): 20.0 -> 0.0 DENENDI, GERI ALINDI. Fast-eps politikasiyla
+# eval ep15 checkpoint'i BYTE-BYTE AYNI cikti (it2b vs it3) — yani
+# _unnecessary_entry o rejimde neredeyse hic tetiklenmiyor (ajan zaten
+# ring'lere girmiyor), penalty'yi kaldirmak HICBIR SEY degistirmedi.
+# 20.0'da kaldi.
+R_UNNECESSARY_RISK = 20.0
 
 # ---------------------------------------------------------------- egitim (ortak)
 SEED = 0
