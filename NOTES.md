@@ -527,11 +527,41 @@ cekiyor. Bagimsiz tohumlar gerekirdi ama onlar da kotu (seed 1 %27).
 **Tek ep25 fast-eps ckpt = %70 (100 harita, temiz olcum).** Onceki %69
 kaydi 40-harita selector'du; gercek ~%70. Timeout %34 = asil kayip kanali.
 
-### it15b: eps-sweep — ep25 ckpt'yi deploy-time kucuk eps ile eval
-timeout %34 (asiri-temkin) greedy argmax'in kaybi. training-MA %74.7
-eps~0.07 ile. eps in [0,.02,.05,.1] (zar-acik kosuda), rota greedy.
-eps>0 timeout'lari kurtarirsa: stokastik deploy politikasi mesele
-(ama eval.py eps=0 hardcoded, "ruh" sorusu).
+### it15b: eps-sweep (deploy-time uniform eps) — NET NEGATIF
+| eps | team% | timeout% | olu | not |
+|-----|-------|----------|-----|-----|
+| 0.00 | **70.0** | 34.0 | 0.39 | greedy |
+| 0.02 | 63.0 | 7.0 | 1.03 | timeout duzeldi ama olum |
+| 0.05 | 51.0 | 3.0 | 1.34 | |
+
+**KANIT: greedy'nin timeout'u GERCEK bir stall** — kucuk eps %34->%7
+duzeltiyor (~27 harita "takilan" politika). AMA uniform-random radara da
+giriyor -> olu 0.39->1.03 -> NET team DUSUYOR. Uniform kesif cok kaba.
+
+### it15c: BOLTZMANN deploy (softmax Q/temp) — DE NET NEGATIF
+| temp | team% | timeout% | olu |
+|------|-------|----------|-----|
+| greedy | **70.0** | 34.0 | 0.39 |
+| 0.01 | 68.0 | 10.0 | 0.86 |
+| 0.02 | 60.0 | 4.0 | 1.19 |
+
+Boltzmann uniform-eps'ten IYI (Q-agirlik olumu biraz azaltiyor: 0.86 vs
+1.03 @ benzer timeout) ama HALA net negatif. **Stall'i kirmak = radar-yogun
+bolgede HAREKET = risk. Deger fonksiyonu tam da onu kacinmak icin
+stall'lamis. O ~27 harita GERCEKTEN tehlikeli, politika DOGRU reddediyor.**
+
+### DEPLOYMENT-POLITIKA ACISI TUKENDI (it15b + it15c)
+uniform-eps VE Boltzmann: ikisi de timeout'u olume takas ediyor, net
+negatif. **greedy %70 = bu checkpoint'in GERCEK tavani.** %75'e giden tek
+yol: DAHA IYI DEGER FONKSIYONU (o 27 stall haritada oracle'in bulabildigi
+guvenli rotayi bulan). Oracle tavani %81.5 -> %70 = oracle'in %86'si.
+
+### it16: QR-DQN (distributional RL) — son ciddi algoritmik bahis
+Motivasyon: deger fonksiyonu stokastik ceza (olum) altinda KARAMSAR mean'e
+cokuyor (it7-it15 pattern). Distributional RL (Dabney 2017) tum getiri
+DAGILIMINI ogrenir — mean cokmesine daha dayanikli, risk-farkinda rota
+ogrenmesi literaturde daha iyi. VDN: Q_tot mean'ler uzerinden, quantile
+kaybi per-agent. --quantiles N bayragi. ~%50 sans, ~2 saat is.
 
 
 
