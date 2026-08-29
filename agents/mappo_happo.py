@@ -36,7 +36,7 @@ from torch.distributions import Categorical
 from agents.networks import CNNQNet, build_qnet
 from config import (AGENT_1, AGENT_2, CNN_CHANNELS, CNN_POOL_SIZE, GAE_LAMBDA,
                     GAMMA, N_ACTIONS, PATCH_SIZE, PPO_ACTOR_LR, PPO_CLIP_COEF,
-                    PPO_CRITIC_LR, PPO_EPOCHS, PPO_ENTROPY_COEF,
+                    PPO_CRITIC_LR, PPO_EPOCHS, PPO_ENTROPY_START, PPO_ENTROPY_END,
                     PPO_MAX_GRAD_NORM, PPO_MINIBATCH_SIZE, PPO_ROLLOUT_EPISODES,
                     PPO_VALUE_COEF, STATE_CHANNELS, STATE_SCALARS)
 
@@ -107,7 +107,11 @@ class PPOTrainer:
         self.device = torch.device(device)
         self.seed = int(seed)
         self.rng = np.random.default_rng(seed)
-        self.entropy_coef = float(PPO_ENTROPY_COEF)
+        # ENTROPI CURRICULUM: baslangicta PPO_ENTROPY_START (yuksek, kesif),
+        # train.py set_entropy_progress ile PPO_ENTROPY_END'e (dusuk, kararli)
+        # anneal edilir. train.py disi cagrilarda (test/tek-kullanim) sabit
+        # START'ta kalir. bkz. config.py PPO_ENTROPY_START notu.
+        self.entropy_coef = float(PPO_ENTROPY_START)
         # Aktorler: build_qnet() ile AYNI CNN govdesi — VDN'deki gibi
         # AGIRLIK PAYLASIMI YOK (bkz. agents/vdn.py modul dosya stringi,
         # ayni gerekce burada da gecerli).
@@ -125,6 +129,14 @@ class PPOTrainer:
         self.rollout_episodes = PPO_ROLLOUT_EPISODES
         self._buf = {name: [] for name in _BUF_FIELDS}
         self._buf_episodes = 0
+
+    def set_entropy_progress(self, frac: float) -> None:
+        """frac 0..1: entropi katsayisini START'tan END'e dogrusal anneal et.
+        train.py ep basina cagirir (VDN'in set_eps_progress'iyle AYNI ritim).
+        Amac: erken egitimde stokastik politika (rollout cesitli), ilerledikce
+        kararli (bkz. config.py PPO_ENTROPY_START notu — euzxx tasarimi)."""
+        frac = min(1.0, max(0.0, frac))
+        self.entropy_coef = PPO_ENTROPY_START + frac * (PPO_ENTROPY_END - PPO_ENTROPY_START)
 
     # ------------------------------------------------------------- politika
 

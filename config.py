@@ -563,7 +563,17 @@ PPO_CLIP_COEF = 0.2
 PPO_EPOCHS = 5
 PPO_MINIBATCH_SIZE = 256
 PPO_ROLLOUT_EPISODES = 32      # bu kadar TAM episode -> 1 PPO guncellemesi
-PPO_ENTROPY_COEF = 0.01
+# ENTROPI CURRICULUM (2026-08-29): sabit 0.01 -> 0.03 -> 0.005 anneal.
+# euzxx/MARL-pathtfinding'in ASIL tasarimi boyle ("kesif -> kararli aksiyon"
+# gecisi, doc'ta entropi 0.030->0.005). Bu, VDN'de bu gece %33 -> %69 yapan
+# `--eps-start 0.1` (buffer'i on-policy tut) numarasinin PPO KARSILIGI:
+# yuksek entropi baslangicta politikayi stokastik tutar (buffer cesitli),
+# egitim ilerledikce dusurulur (politika baglanir). Burak'in MAPPO/HAPPO'su
+# sabit 0.01 ile %5-7'de takiliydi. train.py ep basina set_entropy_progress
+# ile anneal eder (EPS_FLOOR_FRAC ile ayni ritim). GERI ALINABILIR:
+# ikisini de 0.01 yap.
+PPO_ENTROPY_START = 0.03
+PPO_ENTROPY_END = 0.005
 PPO_VALUE_COEF = 0.5
 PPO_MAX_GRAD_NORM = 0.5
 

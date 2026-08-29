@@ -73,17 +73,20 @@ def build_agent(algo: str, seed: int, device: str, lr: float = None,
     raise ValueError(algo)
 
 
-# MAPPO/HAPPO epsilon-greedy KULLANMAZ (politika zaten stokastik; act()'in
-# deterministic=True/False'u train=True/False'tan geliyor, bkz.
-# play_episode_ppo) — set_eps/current_eps bu ikisi icin NO-OP.
+# MAPPO/HAPPO epsilon-greedy KULLANMAZ (politika zaten stokastik). AMA ayni
+# egitim-ilerlemesi bilgisiyle ENTROPI CURRICULUM'u annelenir (bkz. config.py
+# PPO_ENTROPY_START notu — VDN'deki eps schedule'in PPO karsiligi). VDN/QMIX
+# icin bu fonksiyon eskisi gibi epsilon ilerlemesini ayarlar.
 def set_eps(agent, algo: str, frac: float):
     if algo in ("mappo", "happo"):
+        agent.set_entropy_progress(frac)
         return
     agent.set_eps_progress(frac)
 
 
 def current_eps(agent, algo: str) -> float:
-    return 0.0 if algo in ("mappo", "happo") else agent.eps
+    # MAPPO/HAPPO icin epsilon yok; loglamada o anki entropi katsayisi gosterilir.
+    return agent.entropy_coef if algo in ("mappo", "happo") else agent.eps
 
 
 def save(agent, algo: str, path_stem: str):
